@@ -1,0 +1,23 @@
+# name: test/sql/ggsql.test
+# description: test ggsql extension
+# group: [sql]
+
+# Before we load the extension, this will fail
+statement error
+SELECT ggsql('Sam');
+----
+Catalog Error: Scalar Function with name ggsql does not exist!
+
+# Require statement will ensure this test is run with this extension loaded
+require ggsql
+
+# Confirm the extension works
+query I
+SELECT ggsql('Sam');
+----
+Ggsql Sam 🐥
+
+query I
+SELECT ggsql_openssl_version('Michael') ILIKE 'Ggsql Michael, my linked OpenSSL version is OpenSSL%';
+----
+true
