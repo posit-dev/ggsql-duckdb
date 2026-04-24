@@ -1,40 +1,25 @@
 #define DUCKDB_EXTENSION_MAIN
 
 #include "ggsql_extension.hpp"
-#include "duckdb.hpp"
-#include "duckdb/common/exception.hpp"
-#include "duckdb/function/scalar_function.hpp"
-#include <duckdb/parser/parsed_data/create_scalar_function_info.hpp>
+#include "ggsql_exec.hpp"
+#include "ggsql_parser.hpp"
 
-// OpenSSL linked through vcpkg
-#include <openssl/opensslv.h>
+#include "duckdb.hpp"
+#include "duckdb/function/scalar_function.hpp"
+#include "duckdb/main/config.hpp"
+#include "duckdb/parser/parser_extension.hpp"
 
 namespace duckdb {
 
-inline void GgsqlScalarFun(DataChunk &args, ExpressionState &state, Vector &result) {
-	auto &name_vector = args.data[0];
-	UnaryExecutor::Execute<string_t, string_t>(name_vector, result, args.size(), [&](string_t name) {
-		return StringVector::AddString(result, "Ggsql " + name.GetString() + " 🐥");
-	});
-}
-
-inline void GgsqlOpenSSLVersionScalarFun(DataChunk &args, ExpressionState &state, Vector &result) {
-	auto &name_vector = args.data[0];
-	UnaryExecutor::Execute<string_t, string_t>(name_vector, result, args.size(), [&](string_t name) {
-		return StringVector::AddString(result, "Ggsql " + name.GetString() + ", my linked OpenSSL version is " +
-		                                           OPENSSL_VERSION_TEXT);
-	});
-}
-
 static void LoadInternal(ExtensionLoader &loader) {
-	// Register a scalar function
-	auto ggsql_scalar_function = ScalarFunction("ggsql", {LogicalType::VARCHAR}, LogicalType::VARCHAR, GgsqlScalarFun);
-	loader.RegisterFunction(ggsql_scalar_function);
+	// Public scalar form: SELECT ggsql('<ggsql query>')
+	ScalarFunction ggsql_scalar("ggsql", {LogicalType::VARCHAR}, LogicalType::VARCHAR, GgsqlScalarFun);
+	loader.RegisterFunction(ggsql_scalar);
 
-	// Register another scalar function
-	auto ggsql_openssl_version_scalar_function = ScalarFunction("ggsql_openssl_version", {LogicalType::VARCHAR},
-	                                                            LogicalType::VARCHAR, GgsqlOpenSSLVersionScalarFun);
-	loader.RegisterFunction(ggsql_openssl_version_scalar_function);
+	// Primary surface: intercept any statement containing VISUALISE/VISUALIZE at the
+	// top level and route it through the same Rust entry point.
+	auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
+	ParserExtension::Register(config, GgsqlParserExtension());
 }
 
 void GgsqlExtension::Load(ExtensionLoader &loader) {

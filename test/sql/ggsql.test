@@ -1,23 +1,40 @@
 # name: test/sql/ggsql.test
 # description: test ggsql extension
 # group: [sql]
+#
+# Run with GGSQL_NO_OPEN_BROWSER=1 in the environment to prevent the Rust side
+# from launching a browser tab for each test query.
 
-# Before we load the extension, this will fail
+# Before the extension loads, ggsql('...') is an unknown function
 statement error
-SELECT ggsql('Sam');
+SELECT ggsql('VISUALISE FROM ggsql:penguins DRAW point');
 ----
-Catalog Error: Scalar Function with name ggsql does not exist!
+Catalog Error
 
-# Require statement will ensure this test is run with this extension loaded
 require ggsql
 
-# Confirm the extension works
+# Parser extension must decline a statement whose only use of VISUALISE is inside a
+# string literal. If it claimed it, we'd get an error from the ggsql pipeline.
 query I
-SELECT ggsql('Sam');
+SELECT 'I love VISUALISE' AS s;
 ----
-Ggsql Sam 🐥
+I love VISUALISE
 
+# Parser extension must also decline when VISUALISE appears in a line comment.
 query I
-SELECT ggsql_openssl_version('Michael') ILIKE 'Ggsql Michael, my linked OpenSSL version is OpenSSL%';
+SELECT 1 AS x; -- VISUALISE would be nice
+----
+1
+
+# Scalar form: running a ggsql query returns a URL to the locally-served plot.
+query I
+SELECT ggsql('SELECT * FROM (VALUES (1, 10), (2, 20), (3, 30)) AS t(x, y) VISUALISE x, y DRAW point')
+  LIKE 'http://127.0.0.1:%';
 ----
 true
+
+# Parser-extension form: typing the ggsql query directly parses and executes without
+# error. We can't literal-match the URL row (port is random), so we just assert that
+# the pipeline runs end-to-end.
+statement ok
+SELECT * FROM (VALUES (1, 10), (2, 20), (3, 30)) AS t(x, y) VISUALISE x, y DRAW point;

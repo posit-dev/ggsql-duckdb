@@ -4,7 +4,7 @@ This repository is based on https://github.com/duckdb/extension-template, check 
 
 ---
 
-This extension, Ggsql, allow you to ... <extension_goal>.
+This extension lets you issue [ggsql](https://ggsql.org) visualisation queries directly inside a DuckDB session. When loaded, any statement containing a top-level `VISUALISE`/`VISUALIZE` keyword is routed through the ggsql engine; the resulting vega-lite chart is served from an in-process HTTP server and opened in your default browser. The shell returns a `plot_url` row pointing at the served spec.
 
 
 ## Building
@@ -33,18 +33,55 @@ The main binaries that will be built are:
 - `ggsql.duckdb_extension` is the loadable binary as it would be distributed.
 
 ## Running the extension
-To run the extension code, simply start the shell with `./build/release/duckdb`.
+Start the shell with `./build/release/duckdb` (the extension is linked in for the dev build) or `LOAD ggsql;` against a regular DuckDB shell that has the loadable `.duckdb_extension` available.
 
-Now we can use the features from the extension directly in DuckDB. The template contains a single scalar function `ggsql()` that takes a string arguments and returns a string:
+Two surfaces are exposed:
+
+**ParserExtension — type ggsql directly:**
 ```
-D select ggsql('Jane') as result;
-┌───────────────┐
-│    result     │
-│    varchar    │
-├───────────────┤
-│ Ggsql Jane 🐥 │
-└───────────────┘
+D SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point;
+┌──────────────────────────────────────────────────────────────────┐
+│                             plot_url                             │
+├──────────────────────────────────────────────────────────────────┤
+│ http://127.0.0.1:<port>/plot/<uuid>                              │
+└──────────────────────────────────────────────────────────────────┘
 ```
+
+**Scalar function — pass ggsql as a string:**
+```
+D SELECT ggsql('SELECT * FROM range(10) t(x) VISUALISE x, x*x AS y DRAW line');
+```
+
+Both forms open the default browser on the URL. Set `GGSQL_NO_OPEN_BROWSER=1` in the environment to suppress the browser open (useful for tests and headless runs).
+
+## Session sharing (current limitation)
+ggsql queries execute on a **fresh DuckDB connection** to the same database instance, not on the session that issued the query. This means ggsql can see:
+
+- Tables in attached `.duckdb` files
+- `CREATE VIEW` (non-temporary) definitions
+- Data under persistent catalogs
+
+...but **not**:
+
+- `CREATE TEMP TABLE` / `CREATE TEMP VIEW` defined in the current shell session
+- Per-session `SET` variables
+- Relations registered on the outer `Connection` from the client side (e.g. a Python `duckdb.register(...)`)
+
+So this fails to find `flights`:
+
+```sql
+CREATE TEMP TABLE flights AS SELECT * FROM 'flights.csv';
+SELECT * FROM flights VISUALISE dep_delay, arr_delay DRAW point;  -- ❌ table not found
+```
+
+The workaround is to use a regular view (or a real table in an attached DB):
+
+```sql
+CREATE OR REPLACE VIEW flights AS SELECT * FROM 'flights.csv';
+SELECT * FROM flights VISUALISE dep_delay, arr_delay DRAW point;  -- ✅
+```
+
+The reason is structural: calling `Query` back into the outer `ClientContext` from inside an executing table function deadlocks on the context's mutex, so we open a sibling `Connection` — which by DuckDB's design has its own temp catalog. We intend to revisit this once ggsql's engine stops requiring recursive SQL callbacks (tracked upstream).
 
 ## Running the tests
 Different tests can be created for DuckDB extensions. The primary way of testing DuckDB extensions should be the SQL tests in `./test/sql`. These SQL tests can be run using:

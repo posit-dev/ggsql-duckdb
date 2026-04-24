@@ -1,0 +1,31 @@
+[package]
+name = "ggsql_ext_rs"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+# ggsql: default features disabled to avoid pulling duckdb-rs (bundled = second DuckDB
+# linked into our extension = binary bloat and symbol clashes). Dialect is inlined in
+# dialect.rs so we don't need the `duckdb` feature.
+ggsql = { version = "0.2.7", default-features = false, features = ["vegalite", "ipc"] }
+
+# Transitional: ggsql 0.2.7's Reader trait returns polars::DataFrame. Drop this dep when
+# ggsql migrates its API to arrow::RecordBatch.
+polars = { version = "*", default-features = false, features = ["ipc", "ipc_streaming"] }
+
+# Arrow: ffi for consuming DuckDB's ArrowArrayStream, ipc for re-encoding into bytes
+# that polars can read back. The IPC roundtrip is transitional — see note in reader.rs.
+arrow = { version = "56", default-features = false, features = ["ipc", "ffi"] }
+
+serde_json = "1"
+tiny_http = "0.12"
+open = "5"
+once_cell = "1"
+uuid = { version = "1", features = ["v4"] }
+
+[profile.release]
+lto = "thin"

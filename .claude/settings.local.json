@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(make)",
+      "Bash(tee /tmp/ggsql-build.log)"
+    ]
+  }
+}
