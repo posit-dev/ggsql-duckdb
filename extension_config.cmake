@@ -4,6 +4,7 @@
 duckdb_extension_load(ggsql
     SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}
     LOAD_TESTS
+    EXTENSION_VERSION v0.2.7
 )
 
 # Any extra extensions that should be built
