@@ -1,15 +1,23 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use once_cell::sync::OnceCell;
 use tiny_http::{Header, Response, Server};
 
 static SERVER: OnceCell<ServerHandle> = OnceCell::new();
 
+/// Poll freshness threshold. The SPA hits /api/latest every 500ms, so any silence
+/// longer than this strongly suggests the tab was closed (or heavily throttled).
+const TAB_ALIVE_WINDOW: Duration = Duration::from_secs(5);
+
 struct State {
     specs: Mutex<HashMap<String, String>>,
     latest: Mutex<Option<String>>,
+    // Last time a client pinged /api/latest. Used as a "tab alive" heartbeat — the
+    // SPA's existing poll loop doubles as liveness signal without a separate endpoint.
+    last_poll: Mutex<Option<Instant>>,
 }
 
 struct ServerHandle {
@@ -18,11 +26,14 @@ struct ServerHandle {
 }
 
 /// Returned from [`register_spec`]. `plot_url` is the stable, per-plot URL (shareable,
-/// deep-linkable). `open_url` is what should be handed to the OS-level `open` — the
-/// root URL, so the browser refocuses an already-open tab instead of spawning a new one.
+/// deep-linkable). `open_url` is what should be handed to the OS-level `open`. The
+/// caller should only spawn a browser when `should_open` is true — otherwise the
+/// existing tab will pick up the new plot via its poll loop and spawning another one
+/// just leaves an annoying trail of windows.
 pub struct Registered {
     pub plot_url: String,
     pub open_url: String,
+    pub should_open: bool,
 }
 
 /// Register a vega-lite spec JSON; return URLs for display and browser-open.
@@ -47,10 +58,28 @@ pub fn register_spec(spec_json: String) -> Result<Registered, String> {
         *latest = Some(id.clone());
     }
 
+    // Open a browser only if we haven't seen a recent poll from the SPA. If the tab
+    // is alive, its next poll (within ~500ms) will pick up the new plot and advance
+    // in place via history.pushState — no `open::that` needed.
+    let should_open = handle
+        .state
+        .last_poll
+        .lock()
+        .ok()
+        .and_then(|g| *g)
+        .map_or(true, |t| t.elapsed() > TAB_ALIVE_WINDOW);
+
     Ok(Registered {
-        plot_url: format!("{}/plot/{}", handle.base_url, id),
+        plot_url: format!("{}/#plot/{}", handle.base_url, id),
         open_url: format!("{}/", handle.base_url),
+        should_open,
     })
+}
+
+fn mark_poll(state: &State) {
+    if let Ok(mut g) = state.last_poll.lock() {
+        *g = Some(Instant::now());
+    }
 }
 
 fn start_server() -> Result<ServerHandle, String> {
@@ -65,6 +94,7 @@ fn start_server() -> Result<ServerHandle, String> {
     let state = Arc::new(State {
         specs: Mutex::new(HashMap::new()),
         latest: Mutex::new(None),
+        last_poll: Mutex::new(None),
     });
     let state_for_thread = Arc::clone(&state);
 
@@ -106,6 +136,9 @@ fn route(url: &str, state: &Arc<State>) -> Response<std::io::Cursor<Vec<u8>>> {
 
     // JSON API.
     if path == "/api/latest" {
+        // Treat every /api/latest hit as a heartbeat — so register_spec can tell
+        // whether an existing browser tab is still alive.
+        mark_poll(state);
         let latest = state.latest.lock().ok().and_then(|g| g.clone());
         let body = match latest {
             Some(uuid) => format!("{{\"uuid\":\"{}\"}}", uuid),
@@ -181,8 +214,11 @@ pub fn standalone_html(spec_json: &str) -> String {
 <meta charset="utf-8">
 <title>ggsql</title>
 <style>
-  html, body {{ margin: 0; padding: 0; background: #fff; font-family: system-ui, sans-serif; }}
-  #vis {{ padding: 1rem; }}
+  html, body {{ margin: 0; padding: 0; height: 100%; background: #fff; font-family: system-ui, sans-serif; }}
+  body {{ display: flex; flex-direction: column; height: 100vh; }}
+  /* ggsql emits width:"container" / height:"container" — the parent must have explicit
+     dimensions. Make #vis a flex:1 child of the body so it fills the viewport. */
+  #vis {{ flex: 1; min-height: 0; padding: 1rem; box-sizing: border-box; }}
 </style>
 <script>{vega}</script>
 <script>{vl}</script>

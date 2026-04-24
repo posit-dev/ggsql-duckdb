@@ -5,12 +5,13 @@
 <title>ggsql</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #fff; font-family: system-ui, sans-serif; }
-  body { display: flex; flex-direction: column; }
-  main { flex: 1; padding: 1rem; overflow: auto; }
+  body { display: flex; flex-direction: column; height: 100vh; }
+  main { flex: 1; min-height: 0; padding: 1rem; display: flex; flex-direction: column; }
+  #vis { flex: 1; min-height: 0; }
+  #vis[hidden] { display: none; }
+  #empty { color: #888; margin: auto; }
   #status { padding: 0.25rem 1rem; color: #888; font-size: 0.8rem; text-align: right; border-top: 1px solid #eee; }
   #status.error { color: #c0392b; }
-  #empty { color: #888; padding: 2rem; text-align: center; }
-  #vis[hidden] { display: none; }
 </style>
 <script src="/assets/vega.min.js"></script>
 <script src="/assets/vega-lite.min.js"></script>
@@ -24,11 +25,21 @@
 <div id="status">ggsql · idle</div>
 <script>
 (() => {
+  // Routing: the plot id lives in location.hash (`#plot/<uuid>`). This matters for
+  // tab reuse — when Rust calls `open::that("http://.../")` for a later query, the
+  // browser treats a tab at `http://.../#plot/<uuid>` as the same URL (hash is ignored
+  // for tab matching) and focuses it instead of spawning a new one.
   const POLL_MS = 500;
   const vis = document.getElementById("vis");
   const empty = document.getElementById("empty");
   const status = document.getElementById("status");
+
+  // `currentUuid` is what's visible in the tab; it moves when the server advances AND
+  // when the user navigates back/forward. `latestKnown` tracks only server-side advances
+  // — it never moves backward when the user hits the back button, so the poller won't
+  // fight the user.
   let currentUuid = null;
+  let latestKnown = null;
   let embedResult = null;
 
   const setStatus = (text, isError) => {
@@ -36,9 +47,13 @@
     status.classList.toggle("error", !!isError);
   };
 
-  const uuidFromPath = () => {
-    const m = location.pathname.match(/^\/plot\/([A-Za-z0-9-]+)\/?$/);
-    return m ? m[1] : null;
+  const uuidFromLocation = () => {
+    const h = location.hash.match(/^#plot\/([A-Za-z0-9-]+)\/?$/);
+    if (h) return h[1];
+    // Backwards compatibility: old URLs used /plot/<uuid> (pathname). Accept those too
+    // and normalise to the hash form on first render.
+    const p = location.pathname.match(/^\/plot\/([A-Za-z0-9-]+)\/?$/);
+    return p ? p[1] : null;
   };
 
   async function renderSpec(uuid) {
@@ -60,19 +75,26 @@
     setStatus(`ggsql · plot ${uuid.slice(0, 8)}`, false);
   }
 
-  async function renderForCurrentPath() {
-    const pathUuid = uuidFromPath();
-    if (pathUuid) {
-      try { await renderSpec(pathUuid); } catch (e) { setStatus(`ggsql · ${e}`, true); }
+  async function renderForCurrentLocation() {
+    const locUuid = uuidFromLocation();
+    if (locUuid) {
+      // If we arrived via a legacy /plot/<uuid> URL, normalise to the hash form.
+      if (location.pathname !== "/" && !location.hash) {
+        history.replaceState(null, "", `/#plot/${locUuid}`);
+      }
+      try {
+        await renderSpec(locUuid);
+      } catch (e) {
+        setStatus(`ggsql · ${e}`, true);
+      }
       return;
     }
-    // On root — resolve to the latest plot (if any) and replace (don't push) so
-    // back-button from the first plot leaves the site.
+    // No specific plot requested — land on the latest, or idle state.
     try {
-      const resp = await fetch("/api/latest");
-      const { uuid } = await resp.json();
+      const { uuid } = await (await fetch("/api/latest")).json();
       if (uuid) {
-        history.replaceState(null, "", `/plot/${uuid}`);
+        history.replaceState(null, "", `#plot/${uuid}`);
+        latestKnown = uuid;
         await renderSpec(uuid);
       } else {
         vis.hidden = true;
@@ -91,25 +113,30 @@
         const resp = await fetch("/api/latest", { cache: "no-store" });
         if (resp.ok) {
           const { uuid } = await resp.json();
-          if (uuid && uuid !== currentUuid) {
-            // Only push history if the tab is currently showing a plot (not the
-            // initial idle state), so the user can back-navigate through plots but
-            // the back button doesn't trap them on the idle page.
-            if (currentUuid !== null) {
-              history.pushState(null, "", `/plot/${uuid}`);
+          if (uuid && uuid !== latestKnown) {
+            // Server registered a new plot since we last checked.
+            if (latestKnown === null) {
+              // First plot of the session; no back-target to preserve.
+              history.replaceState(null, "", `#plot/${uuid}`);
             } else {
-              history.replaceState(null, "", `/plot/${uuid}`);
+              // A real advance — push a history entry so the user can navigate back.
+              history.pushState(null, "", `#plot/${uuid}`);
             }
+            latestKnown = uuid;
             await renderSpec(uuid);
           }
         }
-      } catch (_) { /* transient network error; keep polling */ }
+      } catch (_) { /* transient — keep polling */ }
       await new Promise(r => setTimeout(r, POLL_MS));
     }
   }
 
-  window.addEventListener("popstate", () => { renderForCurrentPath(); });
-  renderForCurrentPath().then(pollLoop);
+  // Back/forward: popstate fires only for user-driven history navigation (pushState
+  // itself does not trigger it). Just re-render for the new URL without touching
+  // latestKnown, so the poller doesn't yank the user forward again.
+  window.addEventListener("popstate", renderForCurrentLocation);
+
+  renderForCurrentLocation().then(pollLoop);
 })();
 </script>
 </body>

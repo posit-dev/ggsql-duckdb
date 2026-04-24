@@ -113,15 +113,11 @@ fn run(query_bytes: &[u8], bridge: ReaderBridge, mode: c_int) -> Result<String, 
             let registered =
                 server::register_spec(json).map_err(|e| format!("ggsql: serve failed: {}", e))?;
 
-            // Best-effort — if the browser fails to open we still return the plot URL so
-            // the user can open it manually. Skip entirely when GGSQL_NO_OPEN_BROWSER is
-            // set so SQL tests and CI don't spawn browser tabs.
-            //
-            // We hand `open::that` the stable *root* URL rather than the per-plot path
-            // so repeated invocations reuse the existing browser tab (the OS `open`
-            // refocuses when the URL matches an already-open tab). Inside the tab, the
-            // SPA polls /api/latest and navigates to the new plot via history.pushState.
-            if std::env::var_os("GGSQL_NO_OPEN_BROWSER").is_none() {
+            // Only spawn a browser when the server believes no tab is currently alive.
+            // An already-open tab will see the new plot via its poll loop and advance
+            // in place; opening another tab on every query piles up windows. See
+            // `register_spec` for the heartbeat logic. Env var still wins for tests/CI.
+            if registered.should_open && std::env::var_os("GGSQL_NO_OPEN_BROWSER").is_none() {
                 let _ = open::that(&registered.open_url);
             }
 
