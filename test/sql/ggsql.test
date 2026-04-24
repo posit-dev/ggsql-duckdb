@@ -27,12 +27,12 @@ SELECT 1 AS x; -- VISUALISE would be nice
 1
 
 # --------------------------------------------------------------------------------
-# Default mode is 'silent' — table-function form emits zero visible rows even
-# though the ggsql pipeline ran (the plot has been served to the browser tab).
+# Default mode is 'silent' — the parser-extension form produces no result set
+# at all (StatementReturnType::NOTHING), so the statement is accepted with no
+# rendered output even though the ggsql pipeline ran and served the plot.
 # --------------------------------------------------------------------------------
-query I
+statement ok
 SELECT * FROM (VALUES (1, 10), (2, 20)) AS t(x, y) VISUALISE x, y DRAW point;
-----
 
 # Explicit 'url' mode — returns the plot URL.
 statement ok
@@ -84,7 +84,7 @@ unrecognised value
 statement ok
 RESET ggsql_output;
 
-# After RESET we're back to the silent default — parser-extension form emits no rows.
-query I
+# After RESET we're back to the silent default — parser-extension form produces
+# no result set at all.
+statement ok
 SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point;
-----

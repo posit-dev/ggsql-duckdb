@@ -137,7 +137,7 @@ static ParserExtensionParseResult ParseFunction(ParserExtensionInfo *, const str
 	return ParserExtensionParseResult(make_uniq<GgsqlParseData>(std::move(stripped)));
 }
 
-static ParserExtensionPlanResult PlanFunction(ParserExtensionInfo *, ClientContext &,
+static ParserExtensionPlanResult PlanFunction(ParserExtensionInfo *, ClientContext &context,
                                               duckdb::unique_ptr<ParserExtensionParseData> parse_data) {
 	auto &data = static_cast<GgsqlParseData &>(*parse_data);
 
@@ -145,7 +145,12 @@ static ParserExtensionPlanResult PlanFunction(ParserExtensionInfo *, ClientConte
 	result.function = GgsqlRunTableFunction();
 	result.parameters.push_back(Value(data.query));
 	result.requires_valid_transaction = false;
-	result.return_type = StatementReturnType::QUERY_RESULT;
+	// In silent mode the table function still runs (ExtensionStatement defaults
+	// output_type to FORCE_MATERIALIZED, so the server/browser side-effect fires),
+	// but marking return_type as NOTHING tells the shell / API clients to skip
+	// rendering entirely instead of printing an empty `plot` result.
+	result.return_type =
+	    IsSilentOutputMode(context) ? StatementReturnType::NOTHING : StatementReturnType::QUERY_RESULT;
 	return result;
 }
 

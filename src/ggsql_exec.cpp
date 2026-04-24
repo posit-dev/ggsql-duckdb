@@ -126,6 +126,10 @@ void GgsqlRunExec(ClientContext &context, TableFunctionInput &data_p, DataChunk 
 
 } // namespace
 
+bool IsSilentOutputMode(ClientContext &context) {
+	return ResolveOutputMode(context) == MODE_SILENT;
+}
+
 GgsqlRunTableFunction::GgsqlRunTableFunction() {
 	name = "ggsql_run";
 	arguments.push_back(LogicalType::VARCHAR);
