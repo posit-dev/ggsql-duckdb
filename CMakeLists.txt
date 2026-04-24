@@ -36,6 +36,7 @@ find_program(CARGO_EXECUTABLE cargo REQUIRED)
 file(GLOB_RECURSE GGSQL_RUST_SOURCES
   ${GGSQL_RUST_DIR}/src/*.rs
   ${GGSQL_RUST_DIR}/include/*.h
+  ${GGSQL_RUST_DIR}/assets/*.js
   ${GGSQL_RUST_DIR}/Cargo.toml
 )
 
