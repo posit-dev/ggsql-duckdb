@@ -1,10 +1,13 @@
-# Descriptor submitted to duckdb/community-extensions as
-# extensions/ggsql/description.yml. Kept here as the source of truth so
-# metadata (description, maintainers, docs) lives with the code.
+# Source of truth for the descriptor submitted to duckdb/community-extensions
+# as extensions/ggsql/description.yml. Per release:
 #
-# The release workflow (.github/workflows/community-extensions-pr.yml)
-# overlays `extension.version` and `repo.ref` at PR time — the values below
-# are placeholders and will be overwritten per release.
+#   1. Tag vX.Y.Z locally, push the tag, publish a GitHub Release.
+#   2. In your fork of duckdb/community-extensions, copy this file to
+#      extensions/ggsql/description.yml and set:
+#        extension.version: X.Y.Z       (no leading "v")
+#        repo.ref:          <full SHA the tag points at>
+#   3. Open a PR against duckdb/community-extensions. Their CI builds, signs,
+#      and publishes to community-extensions.duckdb.org.
 
 extension:
   name: ggsql
@@ -16,6 +19,9 @@ extension:
   maintainers:
     - thomasp85
   requires_toolchains: "rust"
+  # Rust dependencies pull in tiny_http, threads, and `open::that` — none of
+  # which are viable under emscripten. Skip all wasm targets.
+  excluded_platforms: "wasm_mvp;wasm_eh;wasm_threads"
 repo:
   github: posit-dev/ggsql-duckdb
   ref: 0000000000000000000000000000000000000000
