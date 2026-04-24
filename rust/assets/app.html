@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ggsql</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #fff; font-family: system-ui, sans-serif; }
+  body { display: flex; flex-direction: column; }
+  main { flex: 1; padding: 1rem; overflow: auto; }
+  #status { padding: 0.25rem 1rem; color: #888; font-size: 0.8rem; text-align: right; border-top: 1px solid #eee; }
+  #status.error { color: #c0392b; }
+  #empty { color: #888; padding: 2rem; text-align: center; }
+  #vis[hidden] { display: none; }
+</style>
+<script src="/assets/vega.min.js"></script>
+<script src="/assets/vega-lite.min.js"></script>
+<script src="/assets/vega-embed.min.js"></script>
+</head>
+<body>
+<main>
+  <div id="vis" hidden></div>
+  <div id="empty">Waiting for a ggsql query…</div>
+</main>
+<div id="status">ggsql · idle</div>
+<script>
+(() => {
+  const POLL_MS = 500;
+  const vis = document.getElementById("vis");
+  const empty = document.getElementById("empty");
+  const status = document.getElementById("status");
+  let currentUuid = null;
+  let embedResult = null;
+
+  const setStatus = (text, isError) => {
+    status.textContent = text;
+    status.classList.toggle("error", !!isError);
+  };
+
+  const uuidFromPath = () => {
+    const m = location.pathname.match(/^\/plot\/([A-Za-z0-9-]+)\/?$/);
+    return m ? m[1] : null;
+  };
+
+  async function renderSpec(uuid) {
+    if (uuid === currentUuid) return;
+    const resp = await fetch(`/api/spec/${encodeURIComponent(uuid)}`);
+    if (!resp.ok) {
+      empty.hidden = false;
+      vis.hidden = true;
+      empty.textContent = resp.status === 404 ? "Plot not found." : `Error ${resp.status}.`;
+      setStatus("ggsql · not found", true);
+      return;
+    }
+    const spec = await resp.json();
+    empty.hidden = true;
+    vis.hidden = false;
+    if (embedResult && embedResult.finalize) embedResult.finalize();
+    embedResult = await vegaEmbed(vis, spec, { renderer: "canvas", actions: true });
+    currentUuid = uuid;
+    setStatus(`ggsql · plot ${uuid.slice(0, 8)}`, false);
+  }
+
+  async function renderForCurrentPath() {
+    const pathUuid = uuidFromPath();
+    if (pathUuid) {
+      try { await renderSpec(pathUuid); } catch (e) { setStatus(`ggsql · ${e}`, true); }
+      return;
+    }
+    // On root — resolve to the latest plot (if any) and replace (don't push) so
+    // back-button from the first plot leaves the site.
+    try {
+      const resp = await fetch("/api/latest");
+      const { uuid } = await resp.json();
+      if (uuid) {
+        history.replaceState(null, "", `/plot/${uuid}`);
+        await renderSpec(uuid);
+      } else {
+        vis.hidden = true;
+        empty.hidden = false;
+        empty.textContent = "Waiting for a ggsql query…";
+        setStatus("ggsql · idle", false);
+      }
+    } catch (e) {
+      setStatus(`ggsql · ${e}`, true);
+    }
+  }
+
+  async function pollLoop() {
+    while (true) {
+      try {
+        const resp = await fetch("/api/latest", { cache: "no-store" });
+        if (resp.ok) {
+          const { uuid } = await resp.json();
+          if (uuid && uuid !== currentUuid) {
+            // Only push history if the tab is currently showing a plot (not the
+            // initial idle state), so the user can back-navigate through plots but
+            // the back button doesn't trap them on the idle page.
+            if (currentUuid !== null) {
+              history.pushState(null, "", `/plot/${uuid}`);
+            } else {
+              history.replaceState(null, "", `/plot/${uuid}`);
+            }
+            await renderSpec(uuid);
+          }
+        }
+      } catch (_) { /* transient network error; keep polling */ }
+      await new Promise(r => setTimeout(r, POLL_MS));
+    }
+  }
+
+  window.addEventListener("popstate", () => { renderForCurrentPath(); });
+  renderForCurrentPath().then(pollLoop);
+})();
+</script>
+</body>
+</html>

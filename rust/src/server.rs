@@ -7,21 +7,50 @@ use tiny_http::{Header, Response, Server};
 
 static SERVER: OnceCell<ServerHandle> = OnceCell::new();
 
-struct ServerHandle {
-    base_url: String,
-    specs: Arc<Mutex<HashMap<String, String>>>,
+struct State {
+    specs: Mutex<HashMap<String, String>>,
+    latest: Mutex<Option<String>>,
 }
 
-/// Register a vega-lite spec JSON; return the URL the browser should open.
-pub fn register_spec(spec_json: String) -> Result<String, String> {
+struct ServerHandle {
+    base_url: String,
+    state: Arc<State>,
+}
+
+/// Returned from [`register_spec`]. `plot_url` is the stable, per-plot URL (shareable,
+/// deep-linkable). `open_url` is what should be handed to the OS-level `open` — the
+/// root URL, so the browser refocuses an already-open tab instead of spawning a new one.
+pub struct Registered {
+    pub plot_url: String,
+    pub open_url: String,
+}
+
+/// Register a vega-lite spec JSON; return URLs for display and browser-open.
+pub fn register_spec(spec_json: String) -> Result<Registered, String> {
     let handle = SERVER.get_or_try_init(start_server)?;
     let id = uuid::Uuid::new_v4().to_string();
-    handle
-        .specs
-        .lock()
-        .map_err(|e| format!("spec registry poisoned: {}", e))?
-        .insert(id.clone(), spec_json);
-    Ok(format!("{}/plot/{}", handle.base_url, id))
+
+    {
+        let mut specs = handle
+            .state
+            .specs
+            .lock()
+            .map_err(|e| format!("spec registry poisoned: {}", e))?;
+        specs.insert(id.clone(), spec_json);
+    }
+    {
+        let mut latest = handle
+            .state
+            .latest
+            .lock()
+            .map_err(|e| format!("latest pointer poisoned: {}", e))?;
+        *latest = Some(id.clone());
+    }
+
+    Ok(Registered {
+        plot_url: format!("{}/plot/{}", handle.base_url, id),
+        open_url: format!("{}/", handle.base_url),
+    })
 }
 
 fn start_server() -> Result<ServerHandle, String> {
@@ -33,21 +62,24 @@ fn start_server() -> Result<ServerHandle, String> {
         .ok_or("server bound to non-IP address")?;
     let base_url = format!("http://{}:{}", addr.ip(), addr.port());
 
-    let specs: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
-    let specs_for_thread = specs.clone();
+    let state = Arc::new(State {
+        specs: Mutex::new(HashMap::new()),
+        latest: Mutex::new(None),
+    });
+    let state_for_thread = Arc::clone(&state);
 
     thread::Builder::new()
         .name("ggsql-http".into())
-        .spawn(move || serve_loop(server, specs_for_thread))
+        .spawn(move || serve_loop(server, state_for_thread))
         .map_err(|e| format!("failed to spawn http thread: {}", e))?;
 
-    Ok(ServerHandle { base_url, specs })
+    Ok(ServerHandle { base_url, state })
 }
 
-fn serve_loop(server: Server, specs: Arc<Mutex<HashMap<String, String>>>) {
+fn serve_loop(server: Server, state: Arc<State>) {
     for request in server.incoming_requests() {
         let url = request.url().to_string();
-        let response = route(&url, &specs);
+        let response = route(&url, &state);
         // Ignore send errors — client may have disconnected.
         let _ = request.respond(response);
     }
@@ -59,24 +91,41 @@ const VEGA_JS: &[u8] = include_bytes!("../assets/vega.min.js");
 const VEGA_LITE_JS: &[u8] = include_bytes!("../assets/vega-lite.min.js");
 const VEGA_EMBED_JS: &[u8] = include_bytes!("../assets/vega-embed.min.js");
 
-fn route(
-    url: &str,
-    specs: &Arc<Mutex<HashMap<String, String>>>,
-) -> Response<std::io::Cursor<Vec<u8>>> {
-    if let Some(id) = url.strip_prefix("/plot/") {
-        let id = id.split('?').next().unwrap_or(id).trim_end_matches('/');
-        let spec = specs.lock().ok().and_then(|m| m.get(id).cloned());
+fn route(url: &str, state: &Arc<State>) -> Response<std::io::Cursor<Vec<u8>>> {
+    // Strip query string for path matching.
+    let path = url.split('?').next().unwrap_or(url);
+
+    // Static assets.
+    match path {
+        "/assets/vega.min.js" => return js_response(VEGA_JS),
+        "/assets/vega-lite.min.js" => return js_response(VEGA_LITE_JS),
+        "/assets/vega-embed.min.js" => return js_response(VEGA_EMBED_JS),
+        _ => {}
+    }
+
+    // JSON API.
+    if path == "/api/latest" {
+        let latest = state.latest.lock().ok().and_then(|g| g.clone());
+        let body = match latest {
+            Some(uuid) => format!("{{\"uuid\":\"{}\"}}", uuid),
+            None => "{\"uuid\":null}".to_string(),
+        };
+        return json_response(body);
+    }
+    if let Some(rest) = path.strip_prefix("/api/spec/") {
+        let id = rest.trim_end_matches('/');
+        let spec = state.specs.lock().ok().and_then(|m| m.get(id).cloned());
         return match spec {
-            Some(spec_json) => html_response(render_page(&spec_json)),
+            Some(body) => json_response(body),
             None => not_found(),
         };
     }
-    match url.split('?').next().unwrap_or(url) {
-        "/assets/vega.min.js" => js_response(VEGA_JS),
-        "/assets/vega-lite.min.js" => js_response(VEGA_LITE_JS),
-        "/assets/vega-embed.min.js" => js_response(VEGA_EMBED_JS),
-        _ => not_found(),
+
+    // Page routes — the SPA shell handles the display logic based on window.location.
+    if path == "/" || path.starts_with("/plot/") {
+        return html_response(app_shell());
     }
+    not_found()
 }
 
 fn html_response(body: String) -> Response<std::io::Cursor<Vec<u8>>> {
@@ -85,53 +134,32 @@ fn html_response(body: String) -> Response<std::io::Cursor<Vec<u8>>> {
     Response::from_string(body).with_header(header)
 }
 
+fn json_response(body: String) -> Response<std::io::Cursor<Vec<u8>>> {
+    let content_type =
+        Header::from_bytes(&b"Content-Type"[..], &b"application/json; charset=utf-8"[..])
+            .expect("static header bytes");
+    let cache = Header::from_bytes(&b"Cache-Control"[..], &b"no-store"[..])
+        .expect("static header bytes");
+    Response::from_string(body).with_header(content_type).with_header(cache)
+}
+
 fn js_response(body: &'static [u8]) -> Response<std::io::Cursor<Vec<u8>>> {
     let content_type =
         Header::from_bytes(&b"Content-Type"[..], &b"application/javascript; charset=utf-8"[..])
             .expect("static header bytes");
-    // Let the browser cache the bundles for the life of the server. The port and server
-    // identity are process-scoped so there's no upgrade path that would invalidate a stale
-    // cached asset within the same run.
+    // The bundles are immutable for the life of the server process.
     let cache = Header::from_bytes(&b"Cache-Control"[..], &b"public, max-age=31536000, immutable"[..])
         .expect("static header bytes");
-    Response::from_data(body.to_vec())
-        .with_header(content_type)
-        .with_header(cache)
+    Response::from_data(body.to_vec()).with_header(content_type).with_header(cache)
 }
 
 fn not_found() -> Response<std::io::Cursor<Vec<u8>>> {
     Response::from_string("not found").with_status_code(404)
 }
 
-fn render_page(spec_json: &str) -> String {
-    // vega + vega-lite + vega-embed are served locally from /assets/ (vendored, see
-    // rust/assets/). No external fetches.
-    // Use `r##"..."##` so the HTML can contain `"#` from e.g. `id="#vis"` without
-    // terminating the raw string.
-    format!(
-        r##"<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>ggsql</title>
-<style>
-  html, body {{ margin: 0; padding: 0; height: 100%; background: #fff; font-family: system-ui, sans-serif; }}
-  #vis {{ padding: 1rem; }}
-</style>
-<script src="/assets/vega.min.js"></script>
-<script src="/assets/vega-lite.min.js"></script>
-<script src="/assets/vega-embed.min.js"></script>
-</head>
-<body>
-<div id="vis"></div>
-<script id="spec" type="application/json">{spec}</script>
-<script>
-  const spec = JSON.parse(document.getElementById("spec").textContent);
-  vegaEmbed("#vis", spec, {{ renderer: "canvas", actions: true }});
-</script>
-</body>
-</html>"##,
-        // Neutralise any `</script>` in the spec that would break out of the JSON island.
-        spec = spec_json.replace("</", r"<\/"),
-    )
+// The single-page app shell. No spec is inlined; the client reads its own URL, fetches
+// the spec from /api/spec/<uuid>, and polls /api/latest so that new plots appear in the
+// same tab. history.pushState gives us working back/forward.
+fn app_shell() -> String {
+    include_str!("../assets/app.html").to_string()
 }
