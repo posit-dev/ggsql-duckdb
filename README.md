@@ -54,6 +54,38 @@ D SELECT ggsql('SELECT * FROM range(10) t(x) VISUALISE x, x*x AS y DRAW line');
 
 Both forms open the default browser on the URL. Set `GGSQL_NO_OPEN_BROWSER=1` in the environment to suppress the browser open (useful for tests and headless runs).
 
+### Output mode (`ggsql_output`)
+Use the session setting `ggsql_output` to choose what the result column contains:
+
+| Value | Behaviour |
+|---|---|
+| `silent` *(default)* | Opens the default browser; the SQL result has **zero rows**. Good for interactive use — you see the plot, the shell doesn't spam a URL at you. |
+| `url` | Opens the browser and returns the plot URL in a 1×1 result. Good for scripts that want the URL. |
+| `spec` | Returns the raw vega-lite JSON as VARCHAR. No HTTP server, no browser. Good for piping to other tools. |
+| `html` | Returns a self-contained HTML document (~830 KB — vega + vega-lite + vega-embed inlined from the vendored bundles, plus the spec). No HTTP server, no browser. Good for saving a shareable snapshot: `COPY (SELECT ggsql('…')) TO 'plot.html'`. |
+
+```sql
+-- default: just see the plot
+SELECT * FROM range(10) t(x) VISUALISE x, x*x AS y DRAW line;
+
+-- get the URL back
+SET ggsql_output = 'url';
+SELECT * FROM range(10) t(x) VISUALISE x, x*x AS y DRAW line;
+
+-- get the raw spec
+SET ggsql_output = 'spec';
+SELECT * FROM range(10) t(x) VISUALISE x, x*x AS y DRAW line;
+-- → { "$schema": "...", "data": {...}, "mark": "line", ... }
+
+-- write a self-contained HTML file to disk
+SET ggsql_output = 'html';
+COPY (SELECT ggsql('SELECT * FROM range(10) t(x) VISUALISE x, x*x AS y DRAW line')) TO 'plot.html';
+
+RESET ggsql_output;  -- back to silent
+```
+
+The result column is always named `plot` regardless of mode, so wrapper queries (`SELECT plot FROM …`) keep working when the mode is toggled.
+
 ## Session sharing (current limitation)
 ggsql queries execute on a **fresh DuckDB connection** to the same database instance, not on the session that issued the query. This means ggsql can see:
 

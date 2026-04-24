@@ -26,15 +26,65 @@ SELECT 1 AS x; -- VISUALISE would be nice
 ----
 1
 
-# Scalar form: running a ggsql query returns a URL to the locally-served plot.
+# --------------------------------------------------------------------------------
+# Default mode is 'silent' — table-function form emits zero visible rows even
+# though the ggsql pipeline ran (the plot has been served to the browser tab).
+# --------------------------------------------------------------------------------
 query I
-SELECT ggsql('SELECT * FROM (VALUES (1, 10), (2, 20), (3, 30)) AS t(x, y) VISUALISE x, y DRAW point')
+SELECT * FROM (VALUES (1, 10), (2, 20)) AS t(x, y) VISUALISE x, y DRAW point;
+----
+
+# Explicit 'url' mode — returns the plot URL.
+statement ok
+SET ggsql_output = 'url';
+
+query I
+SELECT ggsql('SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point')
   LIKE 'http://127.0.0.1:%';
 ----
 true
 
-# Parser-extension form: typing the ggsql query directly parses and executes without
-# error. We can't literal-match the URL row (port is random), so we just assert that
-# the pipeline runs end-to-end.
+# 'spec' mode — returns the vega-lite JSON as a VARCHAR, no server, no browser.
 statement ok
-SELECT * FROM (VALUES (1, 10), (2, 20), (3, 30)) AS t(x, y) VISUALISE x, y DRAW point;
+SET ggsql_output = 'spec';
+
+query I
+SELECT ggsql('SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point')
+  LIKE '%vega-lite%';
+----
+true
+
+# 'html' mode — returns a self-contained HTML document with inlined vega bundles.
+statement ok
+SET ggsql_output = 'html';
+
+query I
+SELECT ggsql('SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point')
+  LIKE '<!doctype html>%';
+----
+true
+
+# The inlined bundle should make the HTML payload much larger than the raw spec.
+# (~800 KB for the JS bundles; a bare spec is < 5 KB.)
+query I
+SELECT length(ggsql('SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point')) > 500000;
+----
+true
+
+# Unknown mode values should surface a clear error rather than silently falling back.
+statement ok
+SET ggsql_output = 'nope';
+
+statement error
+SELECT ggsql('SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point');
+----
+unrecognised value
+
+# Reset so the default path keeps working after a setting change.
+statement ok
+RESET ggsql_output;
+
+# After RESET we're back to the silent default — parser-extension form emits no rows.
+query I
+SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point;
+----

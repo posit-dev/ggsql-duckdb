@@ -63,16 +63,24 @@ typedef struct ggsql_reader_bridge {
     ggsql_free_buffer_fn  free_buffer;
 } ggsql_reader_bridge_t;
 
+// Output modes. Must match the switch in rust/src/lib.rs.
+#define GGSQL_MODE_URL    0  // register spec + open browser + return plot URL
+#define GGSQL_MODE_SPEC   1  // return raw vega-lite JSON; no HTTP server, no browser
+#define GGSQL_MODE_HTML   2  // return a self-contained HTML document (vendored assets inlined)
+#define GGSQL_MODE_SILENT 3  // register + open browser but return empty payload
+
 // Run a ggsql query end-to-end.
 //   query      : UTF-8 ggsql source (not required to be NUL-terminated)
 //   query_len  : byte length of query
 //   bridge     : initialised bridge; stays valid for the call
-//   out        : filled with URL (success, returns 0) or error message (returns != 0).
+//   mode       : GGSQL_MODE_URL or GGSQL_MODE_SPEC; picks what `out` contains on success.
+//   out        : success payload (URL or vega-lite JSON) or error message on failure.
 //                Caller must release via ggsql_free_buffer.
 int32_t ggsql_execute(
     const char                  *query,
     size_t                       query_len,
     const ggsql_reader_bridge_t *bridge,
+    int32_t                      mode,
     ggsql_byte_buffer_t         *out);
 
 // Free a buffer that Rust populated. Safe to call on zero-initialised buffers.

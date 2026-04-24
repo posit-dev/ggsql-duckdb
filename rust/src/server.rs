@@ -87,9 +87,10 @@ fn serve_loop(server: Server, state: Arc<State>) {
 
 // Vendored assets — see rust/assets/README.md for versions and upgrade instructions.
 // Embedded at compile time so plots render offline (no CDN fetches).
-const VEGA_JS: &[u8] = include_bytes!("../assets/vega.min.js");
-const VEGA_LITE_JS: &[u8] = include_bytes!("../assets/vega-lite.min.js");
-const VEGA_EMBED_JS: &[u8] = include_bytes!("../assets/vega-embed.min.js");
+// Kept as &str (not bytes) so they can also be inlined into self-contained HTML output.
+const VEGA_JS: &str = include_str!("../assets/vega.min.js");
+const VEGA_LITE_JS: &str = include_str!("../assets/vega-lite.min.js");
+const VEGA_EMBED_JS: &str = include_str!("../assets/vega-embed.min.js");
 
 fn route(url: &str, state: &Arc<State>) -> Response<std::io::Cursor<Vec<u8>>> {
     // Strip query string for path matching.
@@ -97,9 +98,9 @@ fn route(url: &str, state: &Arc<State>) -> Response<std::io::Cursor<Vec<u8>>> {
 
     // Static assets.
     match path {
-        "/assets/vega.min.js" => return js_response(VEGA_JS),
-        "/assets/vega-lite.min.js" => return js_response(VEGA_LITE_JS),
-        "/assets/vega-embed.min.js" => return js_response(VEGA_EMBED_JS),
+        "/assets/vega.min.js" => return js_response(VEGA_JS.as_bytes()),
+        "/assets/vega-lite.min.js" => return js_response(VEGA_LITE_JS.as_bytes()),
+        "/assets/vega-embed.min.js" => return js_response(VEGA_EMBED_JS.as_bytes()),
         _ => {}
     }
 
@@ -143,7 +144,7 @@ fn json_response(body: String) -> Response<std::io::Cursor<Vec<u8>>> {
     Response::from_string(body).with_header(content_type).with_header(cache)
 }
 
-fn js_response(body: &'static [u8]) -> Response<std::io::Cursor<Vec<u8>>> {
+fn js_response(body: &[u8]) -> Response<std::io::Cursor<Vec<u8>>> {
     let content_type =
         Header::from_bytes(&b"Content-Type"[..], &b"application/javascript; charset=utf-8"[..])
             .expect("static header bytes");
@@ -162,4 +163,44 @@ fn not_found() -> Response<std::io::Cursor<Vec<u8>>> {
 // same tab. history.pushState gives us working back/forward.
 fn app_shell() -> String {
     include_str!("../assets/app.html").to_string()
+}
+
+/// Build a fully self-contained HTML document: vega + vega-lite + vega-embed inlined
+/// from the vendored bundles, plus the spec embedded as JSON. No network needed to
+/// render. Used by `ggsql_output = 'html'`.
+///
+/// Safety note: none of the vendored minified bundles contain the literal byte sequence
+/// `</script`, so inlining them inside `<script>…</script>` is safe. A re-bundle that
+/// breaks that invariant would be caught at build time if we add a test; for now, see
+/// the check in rust/assets/README.md.
+pub fn standalone_html(spec_json: &str) -> String {
+    format!(
+        r##"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ggsql</title>
+<style>
+  html, body {{ margin: 0; padding: 0; background: #fff; font-family: system-ui, sans-serif; }}
+  #vis {{ padding: 1rem; }}
+</style>
+<script>{vega}</script>
+<script>{vl}</script>
+<script>{embed}</script>
+</head>
+<body>
+<div id="vis"></div>
+<script id="spec" type="application/json">{spec}</script>
+<script>
+  const spec = JSON.parse(document.getElementById("spec").textContent);
+  vegaEmbed("#vis", spec, {{ renderer: "canvas", actions: true }});
+</script>
+</body>
+</html>"##,
+        vega = VEGA_JS,
+        vl = VEGA_LITE_JS,
+        embed = VEGA_EMBED_JS,
+        // Neutralise any `</script>` in the spec that would break out of the JSON island.
+        spec = spec_json.replace("</", r"<\/"),
+    )
 }

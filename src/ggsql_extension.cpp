@@ -20,6 +20,18 @@ static void LoadInternal(ExtensionLoader &loader) {
 	// top level and route it through the same Rust entry point.
 	auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
 	ParserExtension::Register(config, GgsqlParserExtension());
+
+	// Per-session output mode. Recognised values:
+	//   'silent' (default) — open the browser, emit no visible rows
+	//   'url'              — open the browser, return the plot URL
+	//   'spec'             — return the raw vega-lite JSON; no browser, no HTTP server
+	//   'html'             — return a self-contained HTML document; no browser, no HTTP server
+	config.AddExtensionOption(
+	    "ggsql_output",
+	    "Output mode for ggsql queries. 'silent' (default) opens the browser and emits "
+	    "no rows; 'url' opens the browser and returns the plot URL; 'spec' returns the "
+	    "vega-lite JSON; 'html' returns a self-contained HTML document.",
+	    LogicalType::VARCHAR, Value("silent"));
 }
 
 void GgsqlExtension::Load(ExtensionLoader &loader) {
