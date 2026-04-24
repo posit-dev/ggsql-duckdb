@@ -149,8 +149,7 @@ static ParserExtensionPlanResult PlanFunction(ParserExtensionInfo *, ClientConte
 	// output_type to FORCE_MATERIALIZED, so the server/browser side-effect fires),
 	// but marking return_type as NOTHING tells the shell / API clients to skip
 	// rendering entirely instead of printing an empty `plot` result.
-	result.return_type =
-	    IsSilentOutputMode(context) ? StatementReturnType::NOTHING : StatementReturnType::QUERY_RESULT;
+	result.return_type = IsSilentOutputMode(context) ? StatementReturnType::NOTHING : StatementReturnType::QUERY_RESULT;
 	return result;
 }
 

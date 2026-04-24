@@ -26,12 +26,11 @@ static void LoadInternal(ExtensionLoader &loader) {
 	//   'url'              — open the browser, return the plot URL
 	//   'spec'             — return the raw vega-lite JSON; no browser, no HTTP server
 	//   'html'             — return a self-contained HTML document; no browser, no HTTP server
-	config.AddExtensionOption(
-	    "ggsql_output",
-	    "Output mode for ggsql queries. 'silent' (default) opens the browser and emits "
-	    "no rows; 'url' opens the browser and returns the plot URL; 'spec' returns the "
-	    "vega-lite JSON; 'html' returns a self-contained HTML document.",
-	    LogicalType::VARCHAR, Value("silent"));
+	config.AddExtensionOption("ggsql_output",
+	                          "Output mode for ggsql queries. 'silent' (default) opens the browser and emits "
+	                          "no rows; 'url' opens the browser and returns the plot URL; 'spec' returns the "
+	                          "vega-lite JSON; 'html' returns a self-contained HTML document.",
+	                          LogicalType::VARCHAR, Value("silent"));
 }
 
 void GgsqlExtension::Load(ExtensionLoader &loader) {

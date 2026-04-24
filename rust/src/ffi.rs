@@ -25,7 +25,11 @@ impl ByteBuffer {
     /// Move a Vec<u8> into a heap ByteBuffer. Caller frees with the matching free fn.
     pub fn from_vec(v: Vec<u8>) -> ByteBuffer {
         let mut v = std::mem::ManuallyDrop::new(v);
-        ByteBuffer { ptr: v.as_mut_ptr(), len: v.len(), cap: v.capacity() }
+        ByteBuffer {
+            ptr: v.as_mut_ptr(),
+            len: v.len(),
+            cap: v.capacity(),
+        }
     }
 }
 

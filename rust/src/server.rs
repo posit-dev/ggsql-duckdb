@@ -169,22 +169,33 @@ fn html_response(body: String) -> Response<std::io::Cursor<Vec<u8>>> {
 }
 
 fn json_response(body: String) -> Response<std::io::Cursor<Vec<u8>>> {
-    let content_type =
-        Header::from_bytes(&b"Content-Type"[..], &b"application/json; charset=utf-8"[..])
-            .expect("static header bytes");
-    let cache = Header::from_bytes(&b"Cache-Control"[..], &b"no-store"[..])
-        .expect("static header bytes");
-    Response::from_string(body).with_header(content_type).with_header(cache)
+    let content_type = Header::from_bytes(
+        &b"Content-Type"[..],
+        &b"application/json; charset=utf-8"[..],
+    )
+    .expect("static header bytes");
+    let cache =
+        Header::from_bytes(&b"Cache-Control"[..], &b"no-store"[..]).expect("static header bytes");
+    Response::from_string(body)
+        .with_header(content_type)
+        .with_header(cache)
 }
 
 fn js_response(body: &[u8]) -> Response<std::io::Cursor<Vec<u8>>> {
-    let content_type =
-        Header::from_bytes(&b"Content-Type"[..], &b"application/javascript; charset=utf-8"[..])
-            .expect("static header bytes");
+    let content_type = Header::from_bytes(
+        &b"Content-Type"[..],
+        &b"application/javascript; charset=utf-8"[..],
+    )
+    .expect("static header bytes");
     // The bundles are immutable for the life of the server process.
-    let cache = Header::from_bytes(&b"Cache-Control"[..], &b"public, max-age=31536000, immutable"[..])
-        .expect("static header bytes");
-    Response::from_data(body.to_vec()).with_header(content_type).with_header(cache)
+    let cache = Header::from_bytes(
+        &b"Cache-Control"[..],
+        &b"public, max-age=31536000, immutable"[..],
+    )
+    .expect("static header bytes");
+    Response::from_data(body.to_vec())
+        .with_header(content_type)
+        .with_header(cache)
 }
 
 fn not_found() -> Response<std::io::Cursor<Vec<u8>>> {

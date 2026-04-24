@@ -141,8 +141,8 @@ void EnsureInnerConnection(BridgeCtx &bctx) {
 
 // --- Bridge callbacks ------------------------------------------------------
 
-extern "C" int32_t ExecSqlCallback(void *ctx, const char *sql, size_t sql_len,
-                                   struct ArrowArrayStream *out_stream, ggsql_byte_buffer_t *out_err) {
+extern "C" int32_t ExecSqlCallback(void *ctx, const char *sql, size_t sql_len, struct ArrowArrayStream *out_stream,
+                                   ggsql_byte_buffer_t *out_err) {
 	if (out_stream) {
 		std::memset(out_stream, 0, sizeof(*out_stream));
 	}
@@ -204,9 +204,8 @@ extern "C" int32_t ExecSqlCallback(void *ctx, const char *sql, size_t sql_len,
 	return 0;
 }
 
-extern "C" int32_t RegisterDfCallback(void *ctx, const char *name_p, size_t name_len,
-                                      struct ArrowArrayStream *stream, int replace,
-                                      ggsql_byte_buffer_t *out_err) {
+extern "C" int32_t RegisterDfCallback(void *ctx, const char *name_p, size_t name_len, struct ArrowArrayStream *stream,
+                                      int replace, ggsql_byte_buffer_t *out_err) {
 	if (out_err) {
 		out_err->ptr = nullptr;
 		out_err->len = 0;
@@ -233,16 +232,15 @@ extern "C" int32_t RegisterDfCallback(void *ctx, const char *name_p, size_t name
 		// TODO(ggsql-register-regression): this is ggsql 0.2.7 engine plumbing. When
 		// ggsql stops materialising the main SELECT back into the reader, delete this
 		// whole callback + OwnedArrowStreamFactory plumbing.
-		std::string ddl = std::string(replace ? "CREATE OR REPLACE" : "CREATE")
-		    + " TEMP TABLE " + KeywordHelper::WriteQuoted(name, '"')
-		    + " AS SELECT * FROM arrow_scan(?, ?, ?)";
+		std::string ddl = std::string(replace ? "CREATE OR REPLACE" : "CREATE") + " TEMP TABLE " +
+		                  KeywordHelper::WriteQuoted(name, '"') + " AS SELECT * FROM arrow_scan(?, ?, ?)";
 
 		auto produce = reinterpret_cast<uintptr_t>(&FactoryProduce);
 		auto get_schema = reinterpret_cast<uintptr_t>(&FactoryGetSchema);
 		auto factory_ptr = reinterpret_cast<uintptr_t>(factory.get());
 
-		auto result = bctx->inner->Query(
-		    ddl, Value::POINTER(factory_ptr), Value::POINTER(produce), Value::POINTER(get_schema));
+		auto result =
+		    bctx->inner->Query(ddl, Value::POINTER(factory_ptr), Value::POINTER(produce), Value::POINTER(get_schema));
 		if (!result) {
 			WriteError(out_err, "ggsql bridge: register Query returned null");
 			return 1;

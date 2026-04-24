@@ -1,6 +1,7 @@
 # name: test/sql/ggsql.test
 # description: test ggsql extension
 # group: [sql]
+
 #
 # Run with GGSQL_NO_OPEN_BROWSER=1 in the environment to prevent the Rust side
 # from launching a browser tab for each test query.

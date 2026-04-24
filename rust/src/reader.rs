@@ -21,7 +21,10 @@ pub struct CallbackReader {
 
 impl CallbackReader {
     pub fn new(bridge: ReaderBridge) -> Self {
-        Self { bridge, dialect: DuckDbDialect }
+        Self {
+            bridge,
+            dialect: DuckDbDialect,
+        }
     }
 
     /// Drive the C++ callback, consume the returned Arrow C Data Interface stream,
@@ -61,9 +64,8 @@ impl CallbackReader {
         // Re-encode as Arrow IPC stream bytes, then decode with polars. Transient.
         let mut buf: Vec<u8> = Vec::new();
         {
-            let mut writer = StreamWriter::try_new(&mut buf, &schema).map_err(|e| {
-                GgsqlError::ReaderError(format!("ipc writer init failed: {}", e))
-            })?;
+            let mut writer = StreamWriter::try_new(&mut buf, &schema)
+                .map_err(|e| GgsqlError::ReaderError(format!("ipc writer init failed: {}", e)))?;
             for batch in &batches {
                 writer
                     .write(batch)
@@ -75,9 +77,9 @@ impl CallbackReader {
         }
 
         let cursor = Cursor::new(buf);
-        IpcStreamReader::new(cursor).finish().map_err(|e| {
-            GgsqlError::ReaderError(format!("polars ipc decode failed: {}", e))
-        })
+        IpcStreamReader::new(cursor)
+            .finish()
+            .map_err(|e| GgsqlError::ReaderError(format!("polars ipc decode failed: {}", e)))
     }
 }
 
@@ -106,9 +108,10 @@ impl Reader for CallbackReader {
         let stream_reader = arrow::ipc::reader::StreamReader::try_new(cursor, None)
             .map_err(|e| GgsqlError::ReaderError(format!("ipc decode failed: {}", e)))?;
         let schema = stream_reader.schema();
-        let batches: Vec<RecordBatch> = stream_reader
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|e| GgsqlError::ReaderError(format!("ipc read failed: {}", e)))?;
+        let batches: Vec<RecordBatch> =
+            stream_reader
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(|e| GgsqlError::ReaderError(format!("ipc read failed: {}", e)))?;
 
         // Wrap in a RecordBatchReader and export as an FFI_ArrowArrayStream for C++.
         let reader: Box<dyn RecordBatchReader + Send> = Box::new(VecBatchReader {
@@ -168,8 +171,9 @@ fn read_err_buffer(bridge: &ReaderBridge, err: &mut ByteBuffer) -> Option<String
     if err.ptr.is_null() {
         return None;
     }
-    let msg =
-        unsafe { String::from_utf8_lossy(std::slice::from_raw_parts(err.ptr, err.len)).into_owned() };
+    let msg = unsafe {
+        String::from_utf8_lossy(std::slice::from_raw_parts(err.ptr, err.len)).into_owned()
+    };
     unsafe { (bridge.free_buffer)(err) };
     Some(msg)
 }

@@ -46,8 +46,7 @@ int32_t ResolveOutputMode(ClientContext &context) {
 		return MODE_HTML;
 	}
 	throw InvalidInputException(
-	    "ggsql: unrecognised value for ggsql_output '%s' (expected 'silent', 'url', 'spec', or 'html')",
-	    mode);
+	    "ggsql: unrecognised value for ggsql_output '%s' (expected 'silent', 'url', 'spec', or 'html')", mode);
 }
 
 // Invokes the Rust entry point; throws on failure, returns the Rust-provided
