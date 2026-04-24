@@ -41,9 +41,14 @@ file(GLOB_RECURSE GGSQL_RUST_SOURCES
   ${GGSQL_RUST_DIR}/Cargo.toml
 )
 
+# tree-sitter-ggsql's build.rs re-runs `tree-sitter generate` from grammar.js
+# unless GGSQL_SKIP_GENERATE=1; the published crate already ships the
+# generated src/parser.c, so setting this avoids a hard dep on the tree-sitter
+# CLI in CI and clean builds.
 add_custom_command(
   OUTPUT ${GGSQL_RUST_LIB}
-  COMMAND ${CARGO_EXECUTABLE} build --release
+  COMMAND ${CMAKE_COMMAND} -E env GGSQL_SKIP_GENERATE=1
+          ${CARGO_EXECUTABLE} build --release
           --manifest-path ${GGSQL_RUST_DIR}/Cargo.toml
           --target-dir ${GGSQL_RUST_BUILD_DIR}
   DEPENDS ${GGSQL_RUST_SOURCES}
