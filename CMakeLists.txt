@@ -28,9 +28,22 @@ build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
 # -----------------------------------------------------------------------------
 set(GGSQL_RUST_DIR ${CMAKE_CURRENT_SOURCE_DIR}/rust)
 set(GGSQL_RUST_BUILD_DIR ${CMAKE_CURRENT_BINARY_DIR}/rust-target)
-set(GGSQL_RUST_LIB ${GGSQL_RUST_BUILD_DIR}/release/libggsql_ext_rs.a)
 
 find_program(CARGO_EXECUTABLE cargo REQUIRED)
+
+# extension-ci-tools' Makefile passes -DRust_CARGO_TARGET=<triple> for
+# macOS cross-builds and Windows mingw (matching the Corrosion convention).
+# Honor it: pass --target to cargo and adjust the output path accordingly.
+# Without --target, cargo builds for the host arch and the final link fails on
+# osx_amd64 (arm64 runner → x86_64 binary) with "ignoring file ... found
+# architecture arm64, required architecture x86_64".
+if(Rust_CARGO_TARGET)
+  set(GGSQL_CARGO_TARGET_ARGS --target ${Rust_CARGO_TARGET})
+  set(GGSQL_RUST_LIB ${GGSQL_RUST_BUILD_DIR}/${Rust_CARGO_TARGET}/release/libggsql_ext_rs.a)
+else()
+  set(GGSQL_CARGO_TARGET_ARGS "")
+  set(GGSQL_RUST_LIB ${GGSQL_RUST_BUILD_DIR}/release/libggsql_ext_rs.a)
+endif()
 
 # Cargo's stamp file is unreliable; list the Rust sources as the dependency set.
 file(GLOB_RECURSE GGSQL_RUST_SOURCES
@@ -51,6 +64,7 @@ add_custom_command(
           ${CARGO_EXECUTABLE} build --release
           --manifest-path ${GGSQL_RUST_DIR}/Cargo.toml
           --target-dir ${GGSQL_RUST_BUILD_DIR}
+          ${GGSQL_CARGO_TARGET_ARGS}
   DEPENDS ${GGSQL_RUST_SOURCES}
   WORKING_DIRECTORY ${GGSQL_RUST_DIR}
   COMMENT "Building ggsql_ext_rs (release)"
