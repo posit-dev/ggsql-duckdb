@@ -78,9 +78,18 @@ add_custom_command(
 
 add_custom_target(ggsql_rust_lib DEPENDS ${GGSQL_RUST_LIB})
 
-# macOS needs CoreFoundation + Security for some Rust std bits (tls, tiny_http).
+# Rust's `staticlib` emits cargo:rustc-link-lib directives for the system libs
+# its std + deps need, but those don't propagate to a C++ consumer's linker —
+# we have to replicate the platform list manually.
+#  - macOS: CoreFoundation/Security/SystemConfiguration for tls + tiny_http.
+#  - Unix:  standard pthread/dl/m.
+#  - Windows: ntdll (NtCreateNamedPipeFile, used by std::process child pipes)
+#    and userenv (GetUserProfileDirectoryW). The other libs duckdb already
+#    links (ws2_32, bcrypt, advapi32, kernel32) cover the rest.
 if(APPLE)
   set(GGSQL_RUST_SYSDEPS "-framework CoreFoundation" "-framework Security" "-framework SystemConfiguration")
+elseif(WIN32)
+  set(GGSQL_RUST_SYSDEPS ntdll userenv)
 elseif(UNIX)
   set(GGSQL_RUST_SYSDEPS pthread dl m)
 else()

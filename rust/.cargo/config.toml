@@ -1,0 +1,7 @@
+# On windows-msvc, statically link the CRT so the staticlib's CRT model
+# matches the duckdb extension build (which uses /MT and pulls in libucrt.lib).
+# Without this, Rust links against msvcrt.dll (dynamic CRT) and the final
+# extension link fails with LNK4098 ("MSVCRT conflicts with other libs") and
+# unresolved __imp__fdopen / __imp__wassert references.
+[target.'cfg(all(target_os = "windows", target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]
