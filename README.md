@@ -1,4 +1,4 @@
-# ggsql-duckdb
+# ggsql DuckDB extension
 
 A DuckDB extension that routes `VISUALISE`/`VISUALIZE` statements through the [ggsql](https://ggsql.org) engine and renders vega-lite charts. The chart is served from an in-process HTTP server and opened in your default browser.
 
@@ -100,7 +100,7 @@ CREATE OR REPLACE VIEW flights AS SELECT * FROM 'flights.csv';
 SELECT * FROM flights VISUALISE dep_delay, arr_delay DRAW point;  -- ✅
 ```
 
-The reason is structural: calling `Query` back into the outer `ClientContext` from inside an executing table function deadlocks on the context's mutex, so we open a sibling `Connection` — which by DuckDB's design has its own temp catalog. We intend to revisit this once ggsql's engine stops requiring recursive SQL callbacks (tracked upstream).
+The reason is structural: calling `Query` back into the outer `ClientContext` from inside an executing table function deadlocks on the context's mutex, so we open a sibling `Connection` — which by DuckDB's design has its own temp catalog.
 
 ## Running the tests
 
