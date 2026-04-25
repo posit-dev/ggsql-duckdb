@@ -37,12 +37,17 @@ find_program(CARGO_EXECUTABLE cargo REQUIRED)
 # Without --target, cargo builds for the host arch and the final link fails on
 # osx_amd64 (arm64 runner → x86_64 binary) with "ignoring file ... found
 # architecture arm64, required architecture x86_64".
+#
+# Cargo's staticlib filename varies by target: `lib<name>.a` on Unix and
+# Windows-gnu, `<name>.lib` on Windows-MSVC. CMake's per-platform defaults
+# track the C++ target identically, so reuse them.
+set(GGSQL_RUST_LIB_FILENAME "${CMAKE_STATIC_LIBRARY_PREFIX}ggsql_ext_rs${CMAKE_STATIC_LIBRARY_SUFFIX}")
 if(Rust_CARGO_TARGET)
   set(GGSQL_CARGO_TARGET_ARGS --target ${Rust_CARGO_TARGET})
-  set(GGSQL_RUST_LIB ${GGSQL_RUST_BUILD_DIR}/${Rust_CARGO_TARGET}/release/libggsql_ext_rs.a)
+  set(GGSQL_RUST_LIB ${GGSQL_RUST_BUILD_DIR}/${Rust_CARGO_TARGET}/release/${GGSQL_RUST_LIB_FILENAME})
 else()
   set(GGSQL_CARGO_TARGET_ARGS "")
-  set(GGSQL_RUST_LIB ${GGSQL_RUST_BUILD_DIR}/release/libggsql_ext_rs.a)
+  set(GGSQL_RUST_LIB ${GGSQL_RUST_BUILD_DIR}/release/${GGSQL_RUST_LIB_FILENAME})
 endif()
 
 # Cargo's stamp file is unreliable; list the Rust sources as the dependency set.
