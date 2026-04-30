@@ -450,9 +450,9 @@ dependencies = [
 
 [[package]]
 name = "ggsql"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ceed7543608a557d898d7589d29433784d2b189e1752ec62535529dd682f2b1c"
+checksum = "10705408800a29849b901c8eb8bdb26fdc806130559e9d52443c48f1d3656b0f"
 dependencies = [
  "arrow",
  "bytes",
@@ -1210,9 +1210,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-ggsql"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e945641c95bf67b620d111212f574d75f6fa1c5f2c8820c73663ca306cda9b8"
+checksum = "f0131a74e45512204a50bc47438fb370b19a2220bf49d52adf784d42f5812cb0"
 dependencies = [
  "cc",
  "tree-sitter",
