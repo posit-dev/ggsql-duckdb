@@ -9,7 +9,7 @@ src/                    C++ extension: ParserExtension, scalar+table funcs, FFI 
   ggsql_extension.cpp   Entry point; registers scalar `ggsql()`, parser ext, `ggsql_output` setting
   ggsql_parser.cpp      Scans for top-level VISUALISE/VISUALIZE keyword; strips trailing `;`
   ggsql_exec.cpp        TableFunction + scalar impls; resolves output mode; calls into Rust
-  ggsql_bridge.cpp      FFI callbacks: exec_sql + register_df (temp-table materialisation)
+  ggsql_bridge.cpp      FFI callbacks: exec_sql (Arrow stream from inner Connection) + free_buffer
   include/*.hpp
 rust/                   Rust staticlib linked into the extension
   src/lib.rs            `ggsql_execute` C entrypoint; dispatches on output mode
@@ -43,12 +43,10 @@ Output mode is session-scoped via the `ggsql_output` setting (`silent` default /
 ## FFI contract (C++ ↔ Rust)
 
 - `ggsql_execute(query, len, bridge, mode, out) -> int32` — 0 ok, 1 error (payload in `out`), 2 panic. `out` is a `ggsql_byte_buffer_t` allocated by Rust; **caller must free via `ggsql_free_buffer`**.
-- `ReaderBridge` has three callbacks, all implemented in `ggsql_bridge.cpp`:
+- `ReaderBridge` has two callbacks, both implemented in `ggsql_bridge.cpp`:
   - `exec_sql` — runs SQL on the inner `Connection`, returns Arrow stream via C Data Interface.
-  - `register_df` — accepts an Arrow stream from Rust and materialises it as a `TEMP TABLE` (via `arrow_scan`). Used as engine-internal staging by ggsql 0.2.7.
   - `free_buffer` — C++ frees a buffer it previously populated (for error messages).
 - `ffi.rs` and `rust/include/ggsql_ext_rs.h` **must stay layout-compatible**. The header is hand-written, not cbindgen'd.
-- `OwnedArrowStreamFactory` in `ggsql_bridge.cpp` relies on `ArrowArrayStream` being the first field so `reinterpret_cast` works — do not reorder.
 
 ## Inner-Connection model (critical, surprising)
 
@@ -60,7 +58,7 @@ Every ggsql call opens a **sibling `Connection` on the same `DatabaseInstance`**
 
 **Reason**: calling `ClientContext::Query` re-entrantly from inside an executing table function deadlocks on the context's mutex. We open a sibling `Connection` to sidestep it. This is documented in the README under "Session sharing (current limitation)". Revisit only when ggsql stops requiring recursive SQL callbacks.
 
-The inner `Connection` is created lazily and **persists for the whole `ggsql_execute` call**, so temp tables that `register_df` creates remain visible to subsequent `exec_sql` calls within the same invocation.
+The inner `Connection` is created lazily and **persists for the whole `ggsql_execute` call**, so temp tables created by one `exec_sql` call (e.g. ggsql's CTE materialisation, which now goes through `execute_sql(create_or_replace_temp_table_sql(...))`) remain visible to subsequent `exec_sql` calls within the same invocation.
 
 ## HTTP server
 
@@ -70,14 +68,9 @@ The inner `Connection` is created lazily and **persists for the whole `ggsql_exe
 - `/api/latest` doubles as a liveness heartbeat: if it was polled within `TAB_ALIVE_WINDOW` (5s), `register_spec` sets `should_open=false` and the poll loop in the SPA picks up the new plot via `history.pushState` — no second window. `GGSQL_NO_OPEN_BROWSER` overrides regardless.
 - Vega/vega-lite/vega-embed bundles are `include_str!`'d from `rust/assets/` so plots render offline. `html` mode inlines the same bundles into a single self-contained document. `</` in the spec is escaped to avoid `</script>` breakout.
 
-## Transitional pieces (watch for `TODO(ggsql-*)`)
+## Inlined `DuckDbDialect`
 
-These will go away with the next ggsql release (main branch has already migrated to arrow):
-
-- `rust/src/reader.rs` — `exec_sql_via_bridge` does an Arrow → IPC bytes → polars IPC roundtrip because ggsql 0.2.7's `Reader` trait still returns `polars::DataFrame`. Tagged `TODO(ggsql-arrow-migration)`.
-- `rust/src/reader.rs::register` — ggsql 0.2.7's engine materialises the main SELECT as `__ggsql_global_<uuid>__` via `register`. The whole `register_df` FFI + `OwnedArrowStreamFactory` plumbing in `ggsql_bridge.cpp` can be deleted when that's gone. Tagged `TODO(ggsql-register-regression)`.
-- `rust/Cargo.toml` — the `polars` dep is transitional; drop alongside the reader migration.
-- `rust/src/dialect.rs` — `DuckDbDialect` is **inlined from ggsql 0.2.7** (`src/reader/duckdb.rs`). We can't enable ggsql's `duckdb` feature because it pulls in `duckdb-rs` with `bundled`, which would statically link a second DuckDB into an extension already loaded inside DuckDB (symbol clashes + binary bloat). If upstream changes the dialect, re-sync manually.
+`rust/src/dialect.rs` carries a verbatim copy of ggsql's `DuckDbDialect` (currently from ggsql 0.3.0's `src/reader/duckdb.rs`). We can't enable ggsql's `duckdb` feature because it pulls in `duckdb-rs` with `bundled`, which would statically link a second DuckDB into an extension already loaded inside DuckDB (symbol clashes + binary bloat). If upstream changes the dialect, re-sync manually.
 
 ## Conventions
 

@@ -54,7 +54,6 @@ pub unsafe extern "C" fn ggsql_execute(
     let bridge_copy = ReaderBridge {
         ctx: (*bridge).ctx,
         exec_sql: (*bridge).exec_sql,
-        register_df: (*bridge).register_df,
         free_buffer: (*bridge).free_buffer,
     };
 

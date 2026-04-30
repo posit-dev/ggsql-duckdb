@@ -43,20 +43,6 @@ pub type ExecSqlFn = unsafe extern "C" fn(
     out_err: *mut ByteBuffer,
 ) -> c_int;
 
-/// Callback: C++ registers the Arrow stream as a TEMP TABLE on the inner Connection,
-/// under the given name. The stream is consumed by C++; Rust must not use it afterward.
-///
-/// TODO(ggsql-register-regression): drop this once ggsql no longer materialises the main
-/// SELECT as a named temp table inside `execute_with_reader`.
-pub type RegisterDfFn = unsafe extern "C" fn(
-    ctx: *mut c_void,
-    name: *const c_char,
-    name_len: usize,
-    stream: *mut FFI_ArrowArrayStream,
-    replace: c_int,
-    out_err: *mut ByteBuffer,
-) -> c_int;
-
 /// Callback: C++ frees a `ByteBuffer` it previously populated.
 pub type FreeBufferFn = unsafe extern "C" fn(buf: *mut ByteBuffer);
 
@@ -65,6 +51,5 @@ pub type FreeBufferFn = unsafe extern "C" fn(buf: *mut ByteBuffer);
 pub struct ReaderBridge {
     pub ctx: *mut c_void,
     pub exec_sql: ExecSqlFn,
-    pub register_df: RegisterDfFn,
     pub free_buffer: FreeBufferFn,
 }

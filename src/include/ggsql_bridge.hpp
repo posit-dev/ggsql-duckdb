@@ -13,8 +13,8 @@ namespace duckdb {
 // Per-invocation bridge state. Allocated on the stack in the caller (GgsqlRunExec or
 // GgsqlScalarFun), passed as `ctx` through the Rust FFI. Holds the outer ClientContext
 // for reference, and a lazily-created inner Connection that persists across every
-// exec_sql/register callback within a single ggsql_execute call — so temp tables
-// registered by one callback are visible to subsequent ones.
+// exec_sql callback within a single ggsql_execute call — so temp tables created by one
+// callback (e.g. ggsql's CTE materialisation) are visible to subsequent ones.
 struct BridgeCtx {
 	ClientContext *outer = nullptr;
 	unique_ptr<Connection> inner;

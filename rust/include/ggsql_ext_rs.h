@@ -40,26 +40,12 @@ typedef int32_t (*ggsql_exec_sql_fn)(
     struct ArrowArrayStream *out_stream,
     ggsql_byte_buffer_t    *out_err);
 
-// Rust → C++: register an Arrow stream as a TEMP TABLE on the C++ inner Connection.
-// C++ takes ownership of `stream` (consumes and releases it); Rust must not touch it
-// afterward. On failure (non-zero return), `out_err` holds a UTF-8 error message.
-// Transitional: required by ggsql 0.2.7's engine, will go away with the next ggsql
-// release (see ggsql_polars_migration memory).
-typedef int32_t (*ggsql_register_df_fn)(
-    void                    *ctx,
-    const char              *name,
-    size_t                   name_len,
-    struct ArrowArrayStream *stream,
-    int                      replace,
-    ggsql_byte_buffer_t     *out_err);
-
 // C++ frees a buffer it previously populated (called by Rust to release error buffers).
 typedef void (*ggsql_free_buffer_fn)(ggsql_byte_buffer_t *buf);
 
 typedef struct ggsql_reader_bridge {
     void                 *ctx;
     ggsql_exec_sql_fn     exec_sql;
-    ggsql_register_df_fn  register_df;
     ggsql_free_buffer_fn  free_buffer;
 } ggsql_reader_bridge_t;
 

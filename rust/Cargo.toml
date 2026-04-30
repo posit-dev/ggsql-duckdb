@@ -11,15 +11,11 @@ crate-type = ["staticlib"]
 # ggsql: default features disabled to avoid pulling duckdb-rs (bundled = second DuckDB
 # linked into our extension = binary bloat and symbol clashes). Dialect is inlined in
 # dialect.rs so we don't need the `duckdb` feature.
-ggsql = { version = "0.2.7", default-features = false, features = ["vegalite", "ipc"] }
+ggsql = { version = "0.3.0", default-features = false, features = ["vegalite", "ipc"] }
 
-# Transitional: ggsql 0.2.7's Reader trait returns polars::DataFrame. Drop this dep when
-# ggsql migrates its API to arrow::RecordBatch.
-polars = { version = "*", default-features = false, features = ["ipc", "ipc_streaming"] }
-
-# Arrow: ffi for consuming DuckDB's ArrowArrayStream, ipc for re-encoding into bytes
-# that polars can read back. The IPC roundtrip is transitional — see note in reader.rs.
-arrow = { version = "56", default-features = false, features = ["ipc", "ffi"] }
+# Arrow: ffi for consuming DuckDB's ArrowArrayStream. `arrow::compute::concat_batches`
+# is always compiled — no feature flag needed.
+arrow = { version = "56", default-features = false, features = ["ffi"] }
 
 serde_json = "1"
 tiny_http = "0.12"
