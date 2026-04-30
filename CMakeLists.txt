@@ -83,13 +83,14 @@ add_custom_target(ggsql_rust_lib DEPENDS ${GGSQL_RUST_LIB})
 # we have to replicate the platform list manually.
 #  - macOS: CoreFoundation/Security/SystemConfiguration for tls + tiny_http.
 #  - Unix:  standard pthread/dl/m.
-#  - Windows: ntdll (NtCreateNamedPipeFile, used by std::process child pipes)
-#    and userenv (GetUserProfileDirectoryW). The other libs duckdb already
-#    links (ws2_32, bcrypt, advapi32, kernel32) cover the rest.
+#  - Windows: ntdll (NtCreateNamedPipeFile, used by std::process child pipes),
+#    userenv (GetUserProfileDirectoryW), and bcrypt (BCryptGenRandom, used by
+#    getrandom — pulled in via uuid/rand via arrow). DuckDB's own link list
+#    already covers ws2_32/advapi32/kernel32.
 if(APPLE)
   set(GGSQL_RUST_SYSDEPS "-framework CoreFoundation" "-framework Security" "-framework SystemConfiguration")
 elseif(WIN32)
-  set(GGSQL_RUST_SYSDEPS ntdll userenv)
+  set(GGSQL_RUST_SYSDEPS ntdll userenv bcrypt)
 elseif(UNIX)
   set(GGSQL_RUST_SYSDEPS pthread dl m)
 else()
