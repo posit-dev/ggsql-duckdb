@@ -11,11 +11,12 @@ crate-type = ["staticlib"]
 # ggsql: default features disabled to avoid pulling duckdb-rs (bundled = second DuckDB
 # linked into our extension = binary bloat and symbol clashes). Dialect is inlined in
 # dialect.rs so we don't need the `duckdb` feature.
-ggsql = { version = "0.3.2", default-features = false, features = ["vegalite"] }
+ggsql = { version = "0.4.1", default-features = false, features = ["vegalite"] }
 
 # Arrow: ffi for consuming DuckDB's ArrowArrayStream. `arrow::compute::concat_batches`
-# is always compiled — no feature flag needed.
-arrow = { version = "56", default-features = false, features = ["ffi"] }
+# is always compiled — no feature flag needed. Pinned to the same major as ggsql's
+# `arrow` dep (58) so `DataFrame::from_record_batch` accepts the `RecordBatch` we build.
+arrow = { version = "58", default-features = false, features = ["ffi"] }
 
 serde_json = "1"
 tiny_http = "0.12"

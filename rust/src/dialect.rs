@@ -1,11 +1,15 @@
-// Inlined from ggsql 0.3.2 src/reader/duckdb.rs.
+// Inlined from ggsql 0.4.1 src/reader/duckdb.rs (DuckDbDialect impl).
 // We can't enable ggsql's `duckdb` feature because that pulls in duckdb-rs with
 // `bundled`, statically linking a whole second DuckDB into an extension that is
 // already loaded inside DuckDB. DuckDbDialect itself has no duckdb-rs dependency,
 // so we copy it here. Re-sync if ggsql changes this dialect upstream.
+//
+// `wrap_with_column_aliases` is `pub(crate)` upstream, so it is inlined verbatim
+// below rather than imported. `default_sql_aggregate` is `pub`, so we call it
+// through `ggsql::reader`.
 
 use ggsql::naming;
-use ggsql::reader::SqlDialect;
+use ggsql::reader::{default_sql_aggregate, SqlDialect};
 
 pub struct DuckDbDialect;
 
@@ -24,11 +28,82 @@ impl SqlDialect for DuckDbDialect {
         format!("LEAST({})", exprs.join(", "))
     }
 
+    fn sql_st_transform(&self, column: &str, source_crs: &str, target_crs: &str) -> String {
+        format!(
+            "ST_Transform({}, '{}', '{}', always_xy := true)",
+            column,
+            source_crs.replace('\'', "''"),
+            target_crs.replace('\'', "''")
+        )
+    }
+
+    /// WORKAROUND(duckdb-rs#714): geometry columns arrive as WKB BLOB via Arrow.
+    fn sql_ensure_geometry(&self, column: &str) -> String {
+        format!("ST_GeomFromWKB(CAST({column} AS BLOB))")
+    }
+
+    fn sql_select_replace(
+        &self,
+        expr: &str,
+        col: &str,
+        from: &str,
+        _all_columns: &[String],
+    ) -> String {
+        format!("SELECT * REPLACE ({expr} AS {col}) FROM ({from})")
+    }
+
+    fn sql_geometry_to_wkb(&self, column: &str) -> String {
+        format!("ST_AsWKB({column})")
+    }
+
+    fn sql_geometry_bbox(&self, column: &str, from: &str) -> String {
+        format!(
+            "SELECT ST_XMin(ext) AS xmin, ST_YMin(ext) AS ymin, \
+                    ST_XMax(ext) AS xmax, ST_YMax(ext) AS ymax \
+             FROM (SELECT ST_Extent_Agg({column}) AS ext FROM {from})"
+        )
+    }
+
+    fn sql_spatial_setup(&self) -> Vec<String> {
+        vec!["LOAD spatial".into()]
+    }
+
+    fn create_or_replace_temp_table_sql(
+        &self,
+        name: &str,
+        column_aliases: &[String],
+        body_sql: &str,
+    ) -> Vec<String> {
+        let body = wrap_with_column_aliases(body_sql, column_aliases);
+        vec![format!(
+            "CREATE OR REPLACE TEMP TABLE {} AS {}",
+            naming::quote_ident(name),
+            body
+        )]
+    }
+
     fn sql_generate_series(&self, n: usize) -> String {
         format!(
             "\"__ggsql_seq__\"(n) AS (SELECT generate_series FROM GENERATE_SERIES(0, {}))",
             n - 1
         )
+    }
+
+    fn sql_quantile_inline(&self, column: &str, fraction: f64) -> Option<String> {
+        Some(format!(
+            "QUANTILE_CONT({}, {})",
+            naming::quote_ident(column),
+            fraction
+        ))
+    }
+
+    fn sql_aggregate(&self, name: &str, qcol: &str) -> Option<String> {
+        match name {
+            "first" => Some(format!("FIRST({})", qcol)),
+            "last" => Some(format!("LAST({})", qcol)),
+            "diff" => Some(format!("(LAST({c}) - FIRST({c}))", c = qcol)),
+            _ => default_sql_aggregate(name, qcol),
+        }
     }
 
     fn sql_percentile(&self, column: &str, fraction: f64, from: &str, groups: &[String]) -> String {
@@ -53,4 +128,23 @@ impl SqlDialect for DuckDbDialect {
             column = quoted_column
         )
     }
+}
+
+/// Wrap a body SQL in a CTE with a column alias list when aliases are present.
+/// Inlined from ggsql's `reader::wrap_with_column_aliases` (`pub(crate)` upstream).
+/// This is a portable way to rename the body's output columns without relying
+/// on `CREATE TABLE t(a, b) AS ...` (which SQLite does not support).
+fn wrap_with_column_aliases(body_sql: &str, column_aliases: &[String]) -> String {
+    if column_aliases.is_empty() {
+        return body_sql.to_string();
+    }
+    let cols = column_aliases
+        .iter()
+        .map(|c| naming::quote_ident(c))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "WITH __ggsql_aliased__({}) AS ({}) SELECT * FROM __ggsql_aliased__",
+        cols, body_sql
+    )
 }

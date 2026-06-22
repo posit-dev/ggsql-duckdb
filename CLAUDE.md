@@ -70,7 +70,7 @@ The inner `Connection` is created lazily and **persists for the whole `ggsql_exe
 
 ## Inlined `DuckDbDialect`
 
-`rust/src/dialect.rs` carries a verbatim copy of ggsql's `DuckDbDialect` (currently from ggsql 0.3.2's `src/reader/duckdb.rs`). We can't enable ggsql's `duckdb` feature because it pulls in `duckdb-rs` with `bundled`, which would statically link a second DuckDB into an extension already loaded inside DuckDB (symbol clashes + binary bloat). If upstream changes the dialect, re-sync manually.
+`rust/src/dialect.rs` carries a verbatim copy of ggsql's `DuckDbDialect` (currently from ggsql 0.4.1's `src/reader/duckdb.rs`, with the `pub(crate)` `wrap_with_column_aliases` helper inlined). We can't enable ggsql's `duckdb` feature because it pulls in `duckdb-rs` with `bundled`, which would statically link a second DuckDB into an extension already loaded inside DuckDB (symbol clashes + binary bloat). If upstream changes the dialect, re-sync manually.
 
 ## Conventions
 
