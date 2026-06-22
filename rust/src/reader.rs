@@ -65,13 +65,13 @@ impl Reader for CallbackReader {
         self.exec_sql_via_bridge(sql)
     }
 
-    // ggsql 0.3.0's engine no longer calls `register` on the visualise path — CTEs and
+    // ggsql's engine no longer calls `register` on the visualise path — CTEs and
     // the global query are materialised via `execute_sql(create_or_replace_temp_table_sql(...))`
     // instead. The trait method is still required, so we keep a stub that surfaces a
     // clean error if any future code path does invoke it.
     fn register(&self, _name: &str, _df: DataFrame, _replace: bool) -> Result<()> {
         Err(GgsqlError::ReaderError(
-            "ggsql-duckdb reader does not implement register; ggsql 0.3.0 should not call it"
+            "ggsql-duckdb reader does not implement register; the visualise path should not call it"
                 .into(),
         ))
     }
