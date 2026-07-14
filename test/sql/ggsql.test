@@ -89,3 +89,32 @@ RESET ggsql_output;
 # no result set at all.
 statement ok
 SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point;
+
+# --------------------------------------------------------------------------------
+# Issue #13: non-integer PLACE rule positions must not break scale inference.
+# DuckDB types fractional literals as DECIMAL; without normalization ggsql treats
+# them as strings and flips position scales to discrete (or breaks histograms).
+# --------------------------------------------------------------------------------
+statement ok
+SET ggsql_output = 'spec';
+
+statement ok
+SELECT ggsql('
+  SELECT CAST(random() * 50 AS DOUBLE) AS x_val, CAST(random() * 50 AS DOUBLE) AS y_val
+  FROM range(50)
+  VISUALISE x_val AS x, y_val AS y
+  DRAW point
+  PLACE rule SETTING x => 21.5
+');
+
+statement ok
+SELECT ggsql('
+  SELECT CAST(20 + 40 * random() AS DOUBLE) AS value
+  FROM range(500)
+  VISUALISE value AS x
+  DRAW histogram
+  PLACE rule SETTING x => 44.4
+');
+
+statement ok
+RESET ggsql_output;

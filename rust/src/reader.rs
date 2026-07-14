@@ -1,6 +1,8 @@
 use arrow::array::{RecordBatch, RecordBatchReader};
-use arrow::compute::concat_batches;
+use arrow::compute::{cast, concat_batches};
+use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
+use std::sync::Arc;
 use ggsql::reader::{execute_with_reader, Reader, Spec, SqlDialect};
 use ggsql::{DataFrame, GgsqlError, Result};
 
@@ -56,8 +58,54 @@ impl CallbackReader {
                 .map_err(|e| GgsqlError::ReaderError(format!("arrow concat_batches failed: {}", e)))?
         };
 
+        let batch = normalize_arrow_types(batch)?;
         Ok(DataFrame::from_record_batch(batch))
     }
+}
+
+/// Cast Decimal columns to Float64 so ggsql's scale inference sees numeric types.
+///
+/// DuckDB types fractional literals in VALUES/SELECT as DECIMAL (e.g. PLACE rule
+/// `SETTING x => 21.5`). ggsql treats unknown Arrow types as strings, which flips
+/// position scales to discrete and can break histogram binning. The bundled
+/// DuckDBReader in ggsql already normalizes decimals; mirror that here.
+fn normalize_arrow_types(batch: RecordBatch) -> Result<RecordBatch> {
+    let schema = batch.schema();
+    let needs_cast = schema
+        .fields()
+        .iter()
+        .any(|f| matches!(f.data_type(), DataType::Decimal128(_, _)));
+
+    if !needs_cast {
+        return Ok(batch);
+    }
+
+    let mut new_fields = Vec::with_capacity(schema.fields().len());
+    let mut new_columns = Vec::with_capacity(batch.num_columns());
+
+    for (i, field) in schema.fields().iter().enumerate() {
+        if matches!(field.data_type(), DataType::Decimal128(_, _)) {
+            let casted = cast(batch.column(i), &DataType::Float64).map_err(|e| {
+                GgsqlError::ReaderError(format!(
+                    "failed to cast column '{}' from Decimal to Float64: {}",
+                    field.name(),
+                    e
+                ))
+            })?;
+            new_fields.push(Field::new(
+                field.name(),
+                DataType::Float64,
+                field.is_nullable(),
+            ));
+            new_columns.push(casted);
+        } else {
+            new_fields.push(field.as_ref().clone());
+            new_columns.push(batch.column(i).clone());
+        }
+    }
+
+    RecordBatch::try_new(Arc::new(Schema::new(new_fields)), new_columns)
+        .map_err(|e| GgsqlError::ReaderError(format!("failed to normalize arrow types: {}", e)))
 }
 
 impl Reader for CallbackReader {
