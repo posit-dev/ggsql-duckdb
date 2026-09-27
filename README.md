@@ -2,9 +2,18 @@
 
 A DuckDB extension that routes `VISUALISE`/`VISUALIZE` statements through the [ggsql](https://ggsql.org) engine and renders vega-lite charts. The chart is served from an in-process HTTP server and opened in your default browser.
 
+## DuckDB 2.0 migration branch
+
+This branch targets a pinned DuckDB 2.0 **alpha** commit and ggsql **0.5.2**.
+It is a development build; it is not the version installed by
+`INSTALL ggsql FROM community`. The native extension must be loaded by a DuckDB
+build with the matching ABI. See [the migration notes](docs/DUCKDB_2_MIGRATION.md)
+for exact dependency refs, compatibility changes, and validation instructions.
+
 ## Building
 
 ```sh
+git submodule update --init --recursive
 make
 ```
 

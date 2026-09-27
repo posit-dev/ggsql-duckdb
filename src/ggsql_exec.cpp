@@ -90,7 +90,7 @@ struct GgsqlRunGlobalState : public GlobalTableFunctionState {
 };
 
 duckdb::unique_ptr<FunctionData> GgsqlRunBind(ClientContext &context, TableFunctionBindInput &input,
-                                              vector<LogicalType> &return_types, vector<string> &names) {
+                                              vector<LogicalType> &return_types, vector<Identifier> &names) {
 	// Single stable column name regardless of mode so user SQL like `SELECT plot FROM …`
 	// keeps working when the mode is toggled mid-session.
 	names.emplace_back("plot");

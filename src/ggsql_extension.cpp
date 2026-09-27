@@ -14,6 +14,9 @@ namespace duckdb {
 static void LoadInternal(ExtensionLoader &loader) {
 	// Public scalar form: SELECT ggsql('<ggsql query>')
 	ScalarFunction ggsql_scalar("ggsql", {LogicalType::VARCHAR}, LogicalType::VARCHAR, GgsqlScalarFun);
+	// Execution can fail, observes database/settings changes, and may open a browser.
+	ggsql_scalar.SetFallible();
+	ggsql_scalar.SetVolatile();
 	loader.RegisterFunction(ggsql_scalar);
 
 	// Primary surface: intercept any statement containing VISUALISE/VISUALIZE at the

@@ -5,7 +5,8 @@
 
 namespace duckdb {
 
-// Data stashed between parse_function and plan_function — just the original ggsql query.
+// Data stashed between parse_function and plan_function: ggsql source reconstructed
+// from DuckDB's token spellings, without the statement terminator.
 struct GgsqlParseData : public ParserExtensionParseData {
 	explicit GgsqlParseData(string query_p) : query(std::move(query_p)) {
 	}
@@ -28,10 +29,5 @@ class GgsqlParserExtension : public ParserExtension {
 public:
 	GgsqlParserExtension();
 };
-
-// Scanner exposed for testability. Returns true if `query` contains a top-level
-// VISUALISE/VISUALIZE keyword, skipping string literals, quoted identifiers, and
-// SQL line/block comments.
-bool ContainsVisualiseKeyword(const string &query);
 
 } // namespace duckdb

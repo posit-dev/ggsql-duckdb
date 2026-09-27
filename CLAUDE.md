@@ -20,7 +20,7 @@ rust/                   Rust staticlib linked into the extension
   include/ggsql_ext_rs.h  Hand-rolled C header; must track ffi.rs
   assets/               Vendored vega/vega-lite/vega-embed bundles + SPA shell
 test/sql/ggsql.test     SQL logic tests — run with GGSQL_NO_OPEN_BROWSER=1
-duckdb/, extension-ci-tools/  Submodules; versions bumped per release (see docs/UPDATING.md)
+duckdb/, extension-ci-tools/  Pinned submodules (see docs/DUCKDB_2_MIGRATION.md)
 ```
 
 ## Build / test
@@ -29,13 +29,13 @@ duckdb/, extension-ci-tools/  Submodules; versions bumped per release (see docs/
 - `make test` — runs SQL logic tests. Set `GGSQL_NO_OPEN_BROWSER=1` to stop Rust from launching a browser tab per test.
 - CMake drives `cargo build --release` via a custom command; Rust sources + `assets/*` are listed as dependencies so edits trigger rebuilds.
 - macOS links `CoreFoundation`, `Security`, `SystemConfiguration` (needed by Rust std / tiny_http TLS bits).
-- DuckDB target version is set in three places — keep them in sync: `.github/workflows/MainDistributionPipeline.yml` (`duckdb_version`, `ci_tools_version`, workflow `@` tag) and the `duckdb` + `extension-ci-tools` submodule refs. `docs/UPDATING.md` has the full checklist.
+- DuckDB and CI-tool refs are pinned in `.github/workflows/MainDistributionPipeline.yml` (`duckdb_version`, `ci_tools_version`, workflow `@` refs) and the `duckdb` + `extension-ci-tools` submodules. Keep each workflow ref aligned with its matching submodule. See `docs/DUCKDB_2_MIGRATION.md` for this branch's pins and validation.
 
 ## User-visible surface
 
 Two entry points, both funnel into the same Rust `ggsql_execute`:
 
-- **ParserExtension** — any statement containing a top-level `VISUALISE`/`VISUALIZE` keyword is claimed and planned as a call to the `ggsql_run` table function. The scanner in `ggsql_parser.cpp` is hand-rolled: it skips `'...'`, `"..."`, `--` line comments and `/* */` block comments, and matches only at word boundaries. A trailing `;` is stripped because ggsql's tree-sitter grammar rejects it.
+- **ParserExtension** — DuckDB 2.0 supplies `SimpleToken` values. The callback claims one statement containing a top-level `VISUALISE`/`VISUALIZE` keyword and reports its consumed token count. It reconstructs ggsql source from raw token spellings, preserving namespaced datasets and signed literals, and excludes the trailing terminator. Quoted identifiers, string literals, and nested expressions do not trigger the extension.
 - **Scalar** — `SELECT ggsql('<query>')` runs the same pipeline with the string as input.
 
 Output mode is session-scoped via the `ggsql_output` setting (`silent` default / `url` / `spec` / `html`). The result column is always named `plot` — don't rename it. Unknown values throw at bind time. `silent` emits zero rows; `url` emits one; `spec`/`html` return the bytes and do not start the HTTP server or open a browser.
@@ -70,7 +70,7 @@ The inner `Connection` is created lazily and **persists for the whole `ggsql_exe
 
 ## Inlined `DuckDbDialect`
 
-`rust/src/dialect.rs` carries a verbatim copy of ggsql's `DuckDbDialect` (currently from ggsql 0.4.1's `src/reader/duckdb.rs`, with the `pub(crate)` `wrap_with_column_aliases` helper inlined). We can't enable ggsql's `duckdb` feature because it pulls in `duckdb-rs` with `bundled`, which would statically link a second DuckDB into an extension already loaded inside DuckDB (symbol clashes + binary bloat). If upstream changes the dialect, re-sync manually.
+`rust/src/dialect.rs` carries a copy of ggsql's `DuckDbDialect` (verified against ggsql 0.5.2's `src/reader/duckdb.rs`, with the `pub(crate)` `wrap_with_column_aliases` helper inlined). We can't enable ggsql's `duckdb` feature because it pulls in `duckdb-rs` with `bundled`, which would statically link a second DuckDB into an extension already loaded inside DuckDB (symbol clashes + binary bloat). If upstream changes the dialect, re-sync manually.
 
 ## Conventions
 

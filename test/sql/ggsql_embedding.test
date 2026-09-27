@@ -1,0 +1,63 @@
+# name: test/sql/ggsql_embedding.test
+# description: DuckDB 2.0 scalar execution and Arrow bridge regressions
+# group: [sql]
+
+require ggsql
+
+statement ok
+SET ggsql_output = 'spec';
+
+# A user query error must remain a normal runtime error, not invalidate the DB
+# because DuckDB 2.0 considered the scalar function infallible.
+statement error
+SELECT ggsql('SELECT * FROM ggsql_missing_table VISUALISE x, y DRAW point');
+----
+ggsql_missing_table
+
+query I
+SELECT 42;
+----
+42
+
+# Prepared scalar calls must observe the output mode at execution time. Constant
+# folding would freeze the first result and could open a browser during prepare.
+statement ok
+PREPARE ggsql_prepared AS SELECT ggsql('SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point') LIKE '<!doctype html>%';
+
+query I
+EXECUTE ggsql_prepared;
+----
+false
+
+statement ok
+SET ggsql_output = 'html';
+
+query I
+EXECUTE ggsql_prepared;
+----
+true
+
+statement ok
+DEALLOCATE ggsql_prepared;
+
+statement ok
+SET ggsql_output = 'spec';
+
+# Committed in-memory tables are visible through the sibling connection. CTE
+# materialization requires that connection to survive multiple Arrow callbacks.
+statement ok
+CREATE TABLE ggsql_source AS SELECT i AS x, (i * 1.5)::DOUBLE AS y FROM range(5) AS t(i);
+
+query I
+SELECT ggsql('WITH points AS (SELECT * FROM ggsql_source) SELECT * FROM points VISUALISE x, y DRAW point') LIKE '%vega-lite%';
+----
+true
+
+# NULL remains NULL under the scalar function's normal null handling.
+query I
+SELECT ggsql(NULL) IS NULL;
+----
+true
+
+statement ok
+DROP TABLE ggsql_source;

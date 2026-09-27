@@ -1,4 +1,4 @@
-// Inlined from ggsql 0.4.1 src/reader/duckdb.rs (DuckDbDialect impl).
+// Inlined from ggsql 0.5.2 reader/duckdb.rs (DuckDbDialect impl in the published crate).
 // We can't enable ggsql's `duckdb` feature because that pulls in duckdb-rs with
 // `bundled`, statically linking a whole second DuckDB into an extension that is
 // already loaded inside DuckDB. DuckDbDialect itself has no duckdb-rs dependency,

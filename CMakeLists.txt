@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.14...3.29)
 
 # Set extension name here
 set(TARGET_NAME ggsql)
@@ -8,17 +8,10 @@ set(LOADABLE_EXTENSION_NAME ${TARGET_NAME}_loadable_extension)
 
 project(${TARGET_NAME})
 
-include_directories(
-  src/include
-  rust/include
-)
+include_directories(src/include rust/include)
 
-set(EXTENSION_SOURCES
-  src/ggsql_extension.cpp
-  src/ggsql_bridge.cpp
-  src/ggsql_parser.cpp
-  src/ggsql_exec.cpp
-)
+set(EXTENSION_SOURCES src/ggsql_extension.cpp src/ggsql_bridge.cpp
+                      src/ggsql_parser.cpp src/ggsql_exec.cpp)
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
 build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
@@ -31,64 +24,67 @@ set(GGSQL_RUST_BUILD_DIR ${CMAKE_CURRENT_BINARY_DIR}/rust-target)
 
 find_program(CARGO_EXECUTABLE cargo REQUIRED)
 
-# extension-ci-tools' Makefile passes -DRust_CARGO_TARGET=<triple> for
-# macOS cross-builds and Windows mingw (matching the Corrosion convention).
-# Honor it: pass --target to cargo and adjust the output path accordingly.
-# Without --target, cargo builds for the host arch and the final link fails on
-# osx_amd64 (arm64 runner → x86_64 binary) with "ignoring file ... found
-# architecture arm64, required architecture x86_64".
+# extension-ci-tools' Makefile passes -DRust_CARGO_TARGET=<triple> for macOS
+# cross-builds and Windows mingw (matching the Corrosion convention). Honor it:
+# pass --target to cargo and adjust the output path accordingly. Without
+# --target, cargo builds for the host arch and the final link fails on osx_amd64
+# (arm64 runner → x86_64 binary) with "ignoring file ... found architecture
+# arm64, required architecture x86_64".
 #
 # Cargo's staticlib filename varies by target: `lib<name>.a` on Unix and
-# Windows-gnu, `<name>.lib` on Windows-MSVC. CMake's per-platform defaults
-# track the C++ target identically, so reuse them.
-set(GGSQL_RUST_LIB_FILENAME "${CMAKE_STATIC_LIBRARY_PREFIX}ggsql_ext_rs${CMAKE_STATIC_LIBRARY_SUFFIX}")
+# Windows-gnu, `<name>.lib` on Windows-MSVC. CMake's per-platform defaults track
+# the C++ target identically, so reuse them.
+set(GGSQL_RUST_LIB_FILENAME
+    "${CMAKE_STATIC_LIBRARY_PREFIX}ggsql_ext_rs${CMAKE_STATIC_LIBRARY_SUFFIX}")
 if(Rust_CARGO_TARGET)
   set(GGSQL_CARGO_TARGET_ARGS --target ${Rust_CARGO_TARGET})
-  set(GGSQL_RUST_LIB ${GGSQL_RUST_BUILD_DIR}/${Rust_CARGO_TARGET}/release/${GGSQL_RUST_LIB_FILENAME})
+  set(GGSQL_RUST_LIB
+      ${GGSQL_RUST_BUILD_DIR}/${Rust_CARGO_TARGET}/release/${GGSQL_RUST_LIB_FILENAME}
+  )
 else()
   set(GGSQL_CARGO_TARGET_ARGS "")
   set(GGSQL_RUST_LIB ${GGSQL_RUST_BUILD_DIR}/release/${GGSQL_RUST_LIB_FILENAME})
 endif()
 
 # Cargo's stamp file is unreliable; list the Rust sources as the dependency set.
-file(GLOB_RECURSE GGSQL_RUST_SOURCES
+file(
+  GLOB_RECURSE
+  GGSQL_RUST_SOURCES
   ${GGSQL_RUST_DIR}/src/*.rs
   ${GGSQL_RUST_DIR}/include/*.h
   ${GGSQL_RUST_DIR}/assets/*.js
   ${GGSQL_RUST_DIR}/assets/*.html
   ${GGSQL_RUST_DIR}/Cargo.toml
-)
+  ${GGSQL_RUST_DIR}/Cargo.lock)
 
 # tree-sitter-ggsql's build.rs re-runs `tree-sitter generate` from grammar.js
-# unless GGSQL_SKIP_GENERATE=1; the published crate already ships the
-# generated src/parser.c, so setting this avoids a hard dep on the tree-sitter
-# CLI in CI and clean builds.
+# unless GGSQL_SKIP_GENERATE=1; the published crate already ships the generated
+# src/parser.c, so setting this avoids a hard dep on the tree-sitter CLI in CI
+# and clean builds.
 add_custom_command(
   OUTPUT ${GGSQL_RUST_LIB}
-  COMMAND ${CMAKE_COMMAND} -E env GGSQL_SKIP_GENERATE=1
-          ${CARGO_EXECUTABLE} build --release
-          --manifest-path ${GGSQL_RUST_DIR}/Cargo.toml
-          --target-dir ${GGSQL_RUST_BUILD_DIR}
-          ${GGSQL_CARGO_TARGET_ARGS}
+  COMMAND
+    ${CMAKE_COMMAND} -E env GGSQL_SKIP_GENERATE=1 ${CARGO_EXECUTABLE} build
+    --release --locked --manifest-path ${GGSQL_RUST_DIR}/Cargo.toml --target-dir
+    ${GGSQL_RUST_BUILD_DIR} ${GGSQL_CARGO_TARGET_ARGS}
   DEPENDS ${GGSQL_RUST_SOURCES}
   WORKING_DIRECTORY ${GGSQL_RUST_DIR}
   COMMENT "Building ggsql_ext_rs (release)"
-  VERBATIM
-)
+  VERBATIM)
 
 add_custom_target(ggsql_rust_lib DEPENDS ${GGSQL_RUST_LIB})
 
 # Rust's `staticlib` emits cargo:rustc-link-lib directives for the system libs
-# its std + deps need, but those don't propagate to a C++ consumer's linker —
-# we have to replicate the platform list manually.
-#  - macOS: CoreFoundation/Security/SystemConfiguration for tls + tiny_http.
-#  - Unix:  standard pthread/dl/m.
-#  - Windows: ntdll (NtCreateNamedPipeFile, used by std::process child pipes),
-#    userenv (GetUserProfileDirectoryW), and bcrypt (BCryptGenRandom, used by
-#    getrandom — pulled in via uuid/rand via arrow). DuckDB's own link list
-#    already covers ws2_32/advapi32/kernel32.
+# its std + deps need, but those don't propagate to a C++ consumer's linker — we
+# have to replicate the platform list manually. - macOS:
+# CoreFoundation/Security/SystemConfiguration for tls + tiny_http. - Unix:
+# standard pthread/dl/m. - Windows: ntdll (NtCreateNamedPipeFile, used by
+# std::process child pipes), userenv (GetUserProfileDirectoryW), and bcrypt
+# (BCryptGenRandom, used by getrandom — pulled in via uuid/rand via arrow).
+# DuckDB's own link list already covers ws2_32/advapi32/kernel32.
 if(APPLE)
-  set(GGSQL_RUST_SYSDEPS "-framework CoreFoundation" "-framework Security" "-framework SystemConfiguration")
+  set(GGSQL_RUST_SYSDEPS "-framework CoreFoundation" "-framework Security"
+                         "-framework SystemConfiguration")
 elseif(WIN32)
   set(GGSQL_RUST_SYSDEPS ntdll userenv bcrypt)
 elseif(UNIX)
@@ -106,5 +102,4 @@ install(
   TARGETS ${EXTENSION_NAME}
   EXPORT "${DUCKDB_EXPORT_SET}"
   LIBRARY DESTINATION "${INSTALL_LIB_DIR}"
-  ARCHIVE DESTINATION "${INSTALL_LIB_DIR}"
-)
+  ARCHIVE DESTINATION "${INSTALL_LIB_DIR}")

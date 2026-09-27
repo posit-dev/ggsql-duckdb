@@ -1,0 +1,115 @@
+# name: test/sql/ggsql_parser.test
+# description: DuckDB 2.0 token parser statement boundaries and ggsql reconstruction
+# group: [sql]
+
+require ggsql
+
+statement ok
+SET ggsql_output = 'spec';
+
+# Both keyword spellings and the end-of-input sentinel (no semicolon).
+statement ok
+SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point
+
+statement ok
+SELECT 1 AS x, 2 AS y ViSuAlIzE x, y DRAW point;
+
+# The native tokenizer preserves literal contents, including semicolons and
+# words that would otherwise look like ggsql keywords.
+statement ok
+SELECT 'semi;colon VISUALISE' AS x, 2 AS y VISUALISE x, y DRAW point;
+
+statement ok
+SELECT 1 AS "VISUALISE", 2 AS y VISUALISE "VISUALISE" AS x, y DRAW point;
+
+# Comments are discarded by DuckDB's tokenizer, including nested block comments.
+statement ok
+SELECT 1 AS x, /* VISUALISE ; /* nested */ ignored */ 2 AS y
+-- VISUALIZE ; ignored
+VISUALISE x, y DRAW point; -- trailing comment
+
+# ggsql's numeric lexical tokens require the sign to touch the number.
+statement ok
+SELECT -1 AS x, 2 AS y VISUALISE x, y DRAW point SCALE x FROM [-2, 2];
+
+# Native compound operators retain their spelling; only ggsql's lexical signs
+# need joining. Parentheses and SQL casts still round-trip to DuckDB.
+statement ok
+SELECT 1::DOUBLE AS x, (2 + 3) * -1.25 AS y VISUALISE x, y DRAW point;
+
+# Bare VISUALISE starts with an identifier that DuckDB's failed PEG parse may
+# annotate as a column name before invoking the extension callback.
+statement ok
+CREATE TABLE parser_bare_source AS SELECT 1 AS x, 2 AS y;
+
+statement ok
+VISUALISE x, y FROM parser_bare_source DRAW point;
+
+# A quoted namespaced table name is one native token and retains its spelling.
+statement ok
+CREATE TABLE "parser:source" AS SELECT 1 AS x, 2 AS y;
+
+statement ok
+SELECT * FROM "parser:source" VISUALISE x, y DRAW point;
+
+# ggsql recognizes namespaced data sources as one lexical token. This custom
+# reader does not install ggsql's built-in datasets, so successful ggsql parsing
+# reaches DuckDB and reports a missing dataset table. A reconstruction with
+# spaces around ':' would fail earlier in ggsql's parser.
+statement error
+VISUALISE bill_length_mm AS x, bill_depth_mm AS y FROM ggsql:penguins DRAW point;
+----
+Table with name penguins does not exist
+
+# Each callback sees the unparsed tail. It must stop at this statement's
+# terminator so later SQL and visualizations still execute independently.
+statement ok
+CREATE TABLE parser_steps(i INTEGER);
+SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point;
+INSERT INTO parser_steps VALUES (1);
+SELECT 3 AS x, 4 AS y VISUALIZE x, y DRAW point;;;
+INSERT INTO parser_steps VALUES (2);
+
+query II
+SELECT count(*), sum(i) FROM parser_steps;
+----
+2	3
+
+# A semicolon embedded in a string must not cut the ggsql statement short.
+statement ok
+SELECT 'first;second' AS x, 1 AS y VISUALISE x, y DRAW point;
+INSERT INTO parser_steps VALUES (3);
+
+query I
+SELECT sum(i) FROM parser_steps;
+----
+6
+
+# Keywords in strings, quoted identifiers, comments, and nested expressions do
+# not claim a failed SQL statement. These errors must remain DuckDB parser errors.
+statement error
+SELECT 'VISUALISE' +;
+----
+Parser Error
+
+statement error
+SELECT "VISUALISE" +;
+----
+Parser Error
+
+statement error
+SELECT 1 + /* VISUALISE */;
+----
+Parser Error
+
+statement error
+SELECT (VISUALISE) FROM;
+----
+Parser Error
+
+# Never scan past an invalid earlier statement to find a later VISUALISE.
+statement error
+SELECT 1 +;
+SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point;
+----
+Parser Error

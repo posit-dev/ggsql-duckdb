@@ -4,29 +4,34 @@
 name: Main Extension Distribution Pipeline
 on:
   push:
+    branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' && github.sha || '' }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  duckdb-stable-build:
-    name: Build extension binaries
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.5.4
+  duckdb-v2-build:
+    name: Build DuckDB 2.0 alpha extension binaries
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@20bad04ce694ea3f4052efb51c1a177dc9891bfd
     with:
-      duckdb_version: v1.5.4
-      ci_tools_version: v1.5.4
+      # Keep these immutable refs aligned with the submodules.
+      duckdb_version: d8a1bd4f4fbccdf3d22d8f1fe27a94c11c805d0a
+      ci_tools_version: 20bad04ce694ea3f4052efb51c1a177dc9891bfd
       extension_name: ggsql
       extra_toolchains: 'rust'
       exclude_archs: 'wasm_mvp;wasm_eh;wasm_threads'
+      test_config: '{"test_env_variables":{"GGSQL_NO_OPEN_BROWSER":"1"}}'
 
   code-quality-check:
     name: Code Quality Check
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@v1.5.4
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@20bad04ce694ea3f4052efb51c1a177dc9891bfd
     with:
-      duckdb_version: v1.5.4
-      ci_tools_version: v1.5.4
+      duckdb_version: d8a1bd4f4fbccdf3d22d8f1fe27a94c11c805d0a
+      ci_tools_version: 20bad04ce694ea3f4052efb51c1a177dc9891bfd
       extension_name: ggsql
+      extra_toolchains: 'rust'
       format_checks: 'format;tidy'
