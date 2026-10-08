@@ -17,41 +17,47 @@ namespace duckdb {
 
 namespace {
 
-constexpr int32_t MODE_URL = 0;
-constexpr int32_t MODE_SPEC = 1;
-constexpr int32_t MODE_HTML = 2;
-constexpr int32_t MODE_SILENT = 3;
-constexpr const char *SETTING_NAME = "ggsql_output";
+constexpr const char *OUTPUT_SETTING = "ggsql_output";
+constexpr const char *OPTIONS_SETTING = "ggsql_writer_options";
 
-// Read the `ggsql_output` setting; parse into the Rust-side mode integer.
-// Throws on unrecognised values so a typo surfaces at bind / evaluation time
-// rather than silently falling back to the default.
-int32_t ResolveOutputMode(ClientContext &context) {
+// The resolved output configuration for one query: which writer to run and the
+// raw options string to pass through to it. `binary` marks writers whose
+// payload is not UTF-8 text — those surface as BLOB from ggsql_run.
+struct OutputConfig {
+	string writer;
+	string options;
+	bool binary;
+};
+
+// Read the `ggsql_output` and `ggsql_writer_options` settings. Throws on an
+// unrecognised output value so a typo surfaces at bind / evaluation time rather
+// than silently falling back to the default. The options string is forwarded
+// verbatim — ggsql's WriterOptions does the parsing and rejects unknown keys
+// with a message naming them.
+OutputConfig ResolveOutputConfig(ClientContext &context) {
 	Value value;
-	auto hit = context.TryGetCurrentSetting(SETTING_NAME, value);
-	if (!hit) {
-		return MODE_SILENT;
-	}
+	context.TryGetCurrentSetting(OUTPUT_SETTING, value);
 	auto mode = StringUtil::Lower(value.ToString());
-	if (mode == "silent") {
-		return MODE_SILENT;
+
+	OutputConfig cfg;
+	cfg.writer = mode;
+	cfg.binary = mode == "pdf" || mode == "hep";
+	if (mode != "silent" && mode != "url" && mode != "spec" && mode != "html" && !cfg.binary && mode != "svg") {
+		throw InvalidInputException("ggsql: unrecognised value for ggsql_output '%s' (expected 'silent', 'url', "
+		                            "'spec', 'html', 'svg', 'pdf', or 'hep')",
+		                            mode);
 	}
-	if (mode == "url") {
-		return MODE_URL;
-	}
-	if (mode == "spec") {
-		return MODE_SPEC;
-	}
-	if (mode == "html") {
-		return MODE_HTML;
-	}
-	throw InvalidInputException(
-	    "ggsql: unrecognised value for ggsql_output '%s' (expected 'silent', 'url', 'spec', or 'html')", mode);
+
+	Value options;
+	context.TryGetCurrentSetting(OPTIONS_SETTING, options);
+	cfg.options = options.IsNull() ? "" : options.ToString();
+	return cfg;
 }
 
 // Invokes the Rust entry point; throws on failure, returns the Rust-provided
-// UTF-8 payload on success (URL in mode=url, vega-lite JSON in mode=spec).
-string RunGgsqlQuery(ClientContext &context, const string &query, int32_t mode) {
+// payload on success (text for url/spec/html/svg, raw bytes for pdf/hep, empty
+// for silent).
+string RunGgsqlQuery(ClientContext &context, const string &query, const OutputConfig &cfg) {
 	BridgeCtx bctx;
 	bctx.outer = &context;
 	auto bridge = BuildReaderBridge(bctx);
@@ -61,7 +67,8 @@ string RunGgsqlQuery(ClientContext &context, const string &query, int32_t mode) 
 	out.len = 0;
 	out.cap = 0;
 
-	int32_t rc = ggsql_execute(query.data(), query.size(), &bridge, mode, &out);
+	int32_t rc = ggsql_execute(query.data(), query.size(), &bridge, cfg.writer.data(), cfg.writer.size(),
+	                           cfg.options.data(), cfg.options.size(), &out);
 	string payload;
 	if (out.ptr && out.len > 0) {
 		payload.assign(reinterpret_cast<const char *>(out.ptr), out.len);
@@ -79,10 +86,10 @@ string RunGgsqlQuery(ClientContext &context, const string &query, int32_t mode) 
 //===--------------------------------------------------------------------===//
 
 struct GgsqlRunBindData : public TableFunctionData {
-	GgsqlRunBindData(string query_p, int32_t mode_p) : query(std::move(query_p)), mode(mode_p) {
+	GgsqlRunBindData(string query_p, OutputConfig cfg_p) : query(std::move(query_p)), cfg(std::move(cfg_p)) {
 	}
 	string query;
-	int32_t mode;
+	OutputConfig cfg;
 };
 
 struct GgsqlRunGlobalState : public GlobalTableFunctionState {
@@ -94,11 +101,13 @@ duckdb::unique_ptr<FunctionData> GgsqlRunBind(ClientContext &context, TableFunct
 	// Single stable column name regardless of mode so user SQL like `SELECT plot FROM …`
 	// keeps working when the mode is toggled mid-session.
 	names.emplace_back("plot");
-	return_types.emplace_back(LogicalType::VARCHAR);
+	auto cfg = ResolveOutputConfig(context);
+	// Binary writers (pdf, hep) surface as BLOB; everything else is UTF-8 text.
+	return_types.emplace_back(cfg.binary ? LogicalType::BLOB : LogicalType::VARCHAR);
 	if (input.inputs.empty() || input.inputs[0].IsNull()) {
 		throw InvalidInputException("ggsql_run requires a non-null query argument");
 	}
-	return make_uniq<GgsqlRunBindData>(input.inputs[0].ToString(), ResolveOutputMode(context));
+	return make_uniq<GgsqlRunBindData>(input.inputs[0].ToString(), std::move(cfg));
 }
 
 duckdb::unique_ptr<GlobalTableFunctionState> GgsqlRunInit(ClientContext &, TableFunctionInitInput &) {
@@ -112,21 +121,24 @@ void GgsqlRunExec(ClientContext &context, TableFunctionInput &data_p, DataChunk 
 		output.SetCardinality(0);
 		return;
 	}
-	auto payload = RunGgsqlQuery(context, bind_data.query, bind_data.mode);
+	auto payload = RunGgsqlQuery(context, bind_data.query, bind_data.cfg);
 	state.emitted = true;
-	if (bind_data.mode == MODE_SILENT) {
+	if (bind_data.cfg.writer == "silent") {
 		// Side-effect already happened in Rust (server + browser); suppress the row.
 		output.SetCardinality(0);
 		return;
 	}
-	output.SetValue(0, 0, Value(payload));
+	// Note: Value::BLOB(const string&) parses its argument as a blob *literal*
+	// (expecting \xAA escapes); the pointer/length overload takes raw bytes.
+	output.SetValue(
+	    0, 0, bind_data.cfg.binary ? Value::BLOB(const_data_ptr_cast(payload.data()), payload.size()) : Value(payload));
 	output.SetCardinality(1);
 }
 
 } // namespace
 
 bool IsSilentOutputMode(ClientContext &context) {
-	return ResolveOutputMode(context) == MODE_SILENT;
+	return ResolveOutputConfig(context).writer == "silent";
 }
 
 GgsqlRunTableFunction::GgsqlRunTableFunction() {
@@ -143,10 +155,13 @@ GgsqlRunTableFunction::GgsqlRunTableFunction() {
 
 void GgsqlScalarFun(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &context = state.GetContext();
-	auto mode = ResolveOutputMode(context);
+	auto cfg = ResolveOutputConfig(context);
 	auto &input = args.data[0];
+	// The scalar's return type is fixed at registration (VARCHAR), so binary
+	// payloads (pdf/hep) come back as raw bytes in a VARCHAR here; ggsql_run
+	// gives them their proper BLOB type.
 	UnaryExecutor::Execute<string_t, string_t>(input, result, args.size(), [&](string_t q) {
-		auto payload = RunGgsqlQuery(context, q.GetString(), mode);
+		auto payload = RunGgsqlQuery(context, q.GetString(), cfg);
 		return StringVector::AddString(result, payload);
 	});
 }

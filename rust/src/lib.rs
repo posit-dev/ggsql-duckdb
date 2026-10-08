@@ -12,56 +12,65 @@ use std::os::raw::{c_char, c_int};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use ggsql::reader::Reader;
-use ggsql::writer::{VegaLiteWriter, Writer};
+use ggsql::writer::{HepWriter, PdfWriter, SvgWriter, VegaLiteWriter, Writer, WriterOptions};
 
 pub use crate::ffi::{ByteBuffer, ReaderBridge};
 use crate::reader::CallbackReader;
 
-// Must match the GGSQL_MODE_* defines in rust/include/ggsql_ext_rs.h and the
-// MODE_* constants in src/ggsql_exec.cpp.
-const MODE_URL: c_int = 0;
-const MODE_SPEC: c_int = 1;
-const MODE_HTML: c_int = 2;
-const MODE_SILENT: c_int = 3;
-
-/// Execute a ggsql query end-to-end: parse → SQL-via-bridge → vega-lite → serve → open browser.
+/// Execute a ggsql query end-to-end: parse → SQL-via-bridge → render with the
+/// requested writer.
 ///
-/// On success, `out` holds a UTF-8 URL the caller can return to the user. On failure, `out`
-/// holds a UTF-8 error message.
+/// `writer` names the output path: the browser-backed pseudo-writers `silent`,
+/// `url`, and `html`, the raw `spec` (vega-lite JSON), or one of the native
+/// writers `svg`, `pdf`, `hep`. `options` is a `key=value;key=value` string
+/// parsed by ggsql's `WriterOptions` and handed to the native writer's
+/// `from_options`; it must be empty for the browser/spec paths.
+///
+/// On success, `out` holds the writer's payload (text for svg/spec/html/url,
+/// raw bytes for pdf/hep, empty for silent). On failure, `out` holds a UTF-8
+/// error message.
 ///
 /// # Safety
 ///
-/// - `query` must point to at least `query_len` valid bytes (not required to be NUL-terminated).
-/// - `bridge` must point to an initialised `ReaderBridge`. Its `ctx` pointer and function
-///   pointers must stay valid for the duration of this call.
-/// - `out` must point to a writable `ByteBuffer`. Whatever it contained on entry is ignored.
-///   On return, ownership of any allocated bytes transfers to the caller, which must release
-///   them via `ggsql_free_buffer`.
+/// - `query`/`writer`/`options` must point to at least `*_len` valid UTF-8
+///   bytes (not required to be NUL-terminated).
+/// - `bridge` must point to an initialised `ReaderBridge`. Its `ctx` pointer and
+///   function pointers must stay valid for the duration of this call.
+/// - `out` must point to a writable `ByteBuffer`. Whatever it contained on entry
+///   is ignored. On return, ownership of any allocated bytes transfers to the
+///   caller, which must release them via `ggsql_free_buffer`.
 #[no_mangle]
 pub unsafe extern "C" fn ggsql_execute(
     query: *const c_char,
     query_len: usize,
     bridge: *const ReaderBridge,
-    mode: c_int,
+    writer: *const c_char,
+    writer_len: usize,
+    options: *const c_char,
+    options_len: usize,
     out: *mut ByteBuffer,
 ) -> c_int {
-    if query.is_null() || bridge.is_null() || out.is_null() {
+    if query.is_null() || bridge.is_null() || writer.is_null() || options.is_null() || out.is_null() {
         return 1;
     }
     *out = ByteBuffer::EMPTY;
 
     let query_bytes = std::slice::from_raw_parts(query as *const u8, query_len);
+    let writer_bytes = std::slice::from_raw_parts(writer as *const u8, writer_len);
+    let options_bytes = std::slice::from_raw_parts(options as *const u8, options_len);
     let bridge_copy = ReaderBridge {
         ctx: (*bridge).ctx,
         exec_sql: (*bridge).exec_sql,
         free_buffer: (*bridge).free_buffer,
     };
 
-    let result = catch_unwind(AssertUnwindSafe(|| run(query_bytes, bridge_copy, mode)));
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        run(query_bytes, bridge_copy, writer_bytes, options_bytes)
+    }));
 
     match result {
-        Ok(Ok(url)) => {
-            *out = ByteBuffer::from_vec(url.into_bytes());
+        Ok(Ok(payload)) => {
+            *out = ByteBuffer::from_vec(payload);
             0
         }
         Ok(Err(msg)) => {
@@ -93,22 +102,70 @@ pub unsafe extern "C" fn ggsql_free_buffer(buf: *mut ByteBuffer) {
     *b = ByteBuffer::EMPTY;
 }
 
-fn run(query_bytes: &[u8], bridge: ReaderBridge, mode: c_int) -> Result<String, String> {
+fn run(
+    query_bytes: &[u8],
+    bridge: ReaderBridge,
+    writer_bytes: &[u8],
+    options_bytes: &[u8],
+) -> Result<Vec<u8>, String> {
     let query = std::str::from_utf8(query_bytes)
         .map_err(|e| format!("ggsql: query is not valid UTF-8: {}", e))?;
+    let writer = std::str::from_utf8(writer_bytes)
+        .map_err(|e| format!("ggsql: writer name is not valid UTF-8: {}", e))?;
+    let options = std::str::from_utf8(options_bytes)
+        .map_err(|e| format!("ggsql: writer options are not valid UTF-8: {}", e))?;
 
     let reader = CallbackReader::new(bridge);
 
     let spec = reader.execute(query).map_err(|e| format!("ggsql: {}", e))?;
 
+    match writer {
+        "svg" => render_with::<SvgWriter>(&spec, options),
+        "pdf" => render_with::<PdfWriter>(&spec, options),
+        "hep" => render_with::<HepWriter>(&spec, options),
+        "spec" | "html" | "url" | "silent" => {
+            // The browser/vega-lite paths predate writer options; accepting a
+            // stray option here would silently ignore it, which is worse than
+            // an error.
+            if !options.trim().is_empty() {
+                return Err(format!(
+                    "ggsql: ggsql_writer_options only apply to the 'svg', 'pdf', and 'hep' \
+                     output formats (got ggsql_output = '{}')",
+                    writer
+                ));
+            }
+            run_vegalite(&spec, writer)
+        }
+        _ => Err(format!("ggsql: unknown writer '{}'", writer)),
+    }
+}
+
+/// Parse `options` into `WriterOptions`, build the writer via its
+/// `from_options`, and render. Unknown or malformed keys are rejected by ggsql
+/// with a message naming the offending key, so the passthrough needs no
+/// validation of its own.
+fn render_with<W>(spec: &ggsql::reader::Spec, options: &str) -> Result<Vec<u8>, String>
+where
+    W: Writer,
+    W::Output: Into<Vec<u8>>,
+{
+    let parsed = WriterOptions::parse([options]).map_err(|e| format!("ggsql: {}", e))?;
+    let writer = W::from_options(&parsed).map_err(|e| format!("ggsql: {}", e))?;
+    writer
+        .render(spec)
+        .map(Into::into)
+        .map_err(|e| format!("ggsql: render failed: {}", e))
+}
+
+fn run_vegalite(spec: &ggsql::reader::Spec, mode: &str) -> Result<Vec<u8>, String> {
     let json = VegaLiteWriter::new()
-        .render(&spec)
+        .render(spec)
         .map_err(|e| format!("ggsql: render failed: {}", e))?;
 
     match mode {
-        MODE_SPEC => Ok(json),
-        MODE_HTML => Ok(server::standalone_html(&json)),
-        MODE_URL | MODE_SILENT => {
+        "spec" => Ok(json.into_bytes()),
+        "html" => Ok(server::standalone_html(&json).into_bytes()),
+        "url" | "silent" => {
             let registered =
                 server::register_spec(json).map_err(|e| format!("ggsql: serve failed: {}", e))?;
 
@@ -121,13 +178,13 @@ fn run(query_bytes: &[u8], bridge: ReaderBridge, mode: c_int) -> Result<String, 
             }
 
             match mode {
-                MODE_URL => Ok(registered.plot_url),
+                "url" => Ok(registered.plot_url.into_bytes()),
                 // Silent: the browser side-effect has happened; the C++ side will
                 // suppress the row so the user sees an empty result set.
-                MODE_SILENT => Ok(String::new()),
+                "silent" => Ok(Vec::new()),
                 _ => unreachable!(),
             }
         }
-        _ => Err(format!("ggsql: unknown output mode {}", mode)),
+        _ => unreachable!(),
     }
 }

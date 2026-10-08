@@ -81,14 +81,16 @@ add_custom_target(ggsql_rust_lib DEPENDS ${GGSQL_RUST_LIB})
 # Rust's `staticlib` emits cargo:rustc-link-lib directives for the system libs
 # its std + deps need, but those don't propagate to a C++ consumer's linker —
 # we have to replicate the platform list manually.
-#  - macOS: CoreFoundation/Security/SystemConfiguration for tls + tiny_http.
+#  - macOS: CoreFoundation/Security/SystemConfiguration for tls + tiny_http;
+#    CoreText/Foundation for fontique's system-font enumeration (the native
+#    svg/pdf/hep writers).
 #  - Unix:  standard pthread/dl/m.
 #  - Windows: ntdll (NtCreateNamedPipeFile, used by std::process child pipes),
 #    userenv (GetUserProfileDirectoryW), and bcrypt (BCryptGenRandom, used by
 #    getrandom — pulled in via uuid/rand via arrow). DuckDB's own link list
 #    already covers ws2_32/advapi32/kernel32.
 if(APPLE)
-  set(GGSQL_RUST_SYSDEPS "-framework CoreFoundation" "-framework Security" "-framework SystemConfiguration")
+  set(GGSQL_RUST_SYSDEPS "-framework CoreFoundation" "-framework Security" "-framework SystemConfiguration" "-framework CoreText" "-framework Foundation")
 elseif(WIN32)
   set(GGSQL_RUST_SYSDEPS ntdll userenv bcrypt)
 elseif(UNIX)

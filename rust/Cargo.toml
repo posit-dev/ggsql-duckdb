@@ -11,7 +11,12 @@ crate-type = ["staticlib"]
 # ggsql: default features disabled to avoid pulling duckdb-rs (bundled = second DuckDB
 # linked into our extension = binary bloat and symbol clashes). Dialect is inlined in
 # dialect.rs so we don't need the `duckdb` feature.
-ggsql = { version = "0.4.1", default-features = false, features = ["vegalite"] }
+# Writers: `vegalite` powers the browser/HTTP-server display path; `svg`, `pdf`,
+# and `hep` are the native hephaestus-backed writers. Those are vector-only, so
+# they pull in no wgpu/GPU rasteriser and need only a runtime fontconfig on
+# Linux (fontique dlopens it). Raster formats (png/jpeg/tiff/webp) are
+# deliberately left out: they require a GPU adapter at render time.
+ggsql = { version = "0.5.2", default-features = false, features = ["vegalite", "svg", "pdf", "hep"] }
 
 # Arrow: ffi for consuming DuckDB's ArrowArrayStream. `arrow::compute::concat_batches`
 # is always compiled — no feature flag needed. Pinned to the same major as ggsql's

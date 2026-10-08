@@ -7,7 +7,8 @@
 namespace duckdb {
 
 // A TableFunction wrapping ggsql execution. Takes one VARCHAR (the ggsql query) and
-// emits a single-row VARCHAR plot_url result. Used by the ParserExtension plan_function.
+// emits a single-row `plot` result — VARCHAR for text writers (url/spec/html/svg),
+// BLOB for binary ones (pdf/hep). Used by the ParserExtension plan_function.
 class GgsqlRunTableFunction : public TableFunction {
 public:
 	GgsqlRunTableFunction();

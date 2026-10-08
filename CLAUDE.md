@@ -38,11 +38,11 @@ Two entry points, both funnel into the same Rust `ggsql_execute`:
 - **ParserExtension** — any statement containing a top-level `VISUALISE`/`VISUALIZE` keyword is claimed and planned as a call to the `ggsql_run` table function. The scanner in `ggsql_parser.cpp` is hand-rolled: it skips `'...'`, `"..."`, `--` line comments and `/* */` block comments, and matches only at word boundaries. A trailing `;` is stripped because ggsql's tree-sitter grammar rejects it.
 - **Scalar** — `SELECT ggsql('<query>')` runs the same pipeline with the string as input.
 
-Output mode is session-scoped via the `ggsql_output` setting (`silent` default / `url` / `spec` / `html`). The result column is always named `plot` — don't rename it. Unknown values throw at bind time. `silent` emits zero rows; `url` emits one; `spec`/`html` return the bytes and do not start the HTTP server or open a browser.
+Output mode is session-scoped via the `ggsql_output` setting (`silent` default / `url` / `spec` / `html` / `svg` / `pdf` / `hep`). The result column is always named `plot` — don't rename it. Unknown values throw at bind time. `silent` emits zero rows; `url` emits one; `spec`/`html` return the bytes and do not start the HTTP server or open a browser. `svg`/`pdf`/`hep` are ggsql's native hephaestus-backed writers (no vega-lite, no server): `svg` returns VARCHAR, `pdf`/`hep` return binary — `ggsql_run` types their column as BLOB, the scalar stays VARCHAR. `ggsql_writer_options` is a `key=value;…` string forwarded verbatim to ggsql's `WriterOptions` (shared keys: width/height/units/dpi/background); it must be empty for the browser/spec modes — the Rust side errors otherwise.
 
 ## FFI contract (C++ ↔ Rust)
 
-- `ggsql_execute(query, len, bridge, mode, out) -> int32` — 0 ok, 1 error (payload in `out`), 2 panic. `out` is a `ggsql_byte_buffer_t` allocated by Rust; **caller must free via `ggsql_free_buffer`**.
+- `ggsql_execute(query, len, bridge, writer, writer_len, options, options_len, out) -> int32` — 0 ok, 1 error (payload in `out`), 2 panic. `writer` names the output path (`silent`/`url`/`html`/`spec`/`svg`/`pdf`/`hep`); `options` is the raw writer-options string. `out` is a `ggsql_byte_buffer_t` allocated by Rust; **caller must free via `ggsql_free_buffer`**.
 - `ReaderBridge` has two callbacks, both implemented in `ggsql_bridge.cpp`:
   - `exec_sql` — runs SQL on the inner `Connection`, returns Arrow stream via C Data Interface.
   - `free_buffer` — C++ frees a buffer it previously populated (for error messages).

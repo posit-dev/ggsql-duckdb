@@ -49,6 +49,11 @@ Use the session setting `ggsql_output` to choose what a query produces:
 | `url` | Opens the browser and returns the plot URL in a 1×1 result. Good for scripts that want the URL. |
 | `spec` | Returns the raw vega-lite JSON as VARCHAR. No HTTP server, no browser. Good for piping to other tools. |
 | `html` | Returns a self-contained HTML document (~830 KB — vega + vega-lite + vega-embed inlined from the vendored bundles, plus the spec). No HTTP server, no browser. Good for saving a shareable snapshot: `COPY (SELECT ggsql('…')) TO 'plot.html'`. |
+| `svg` | Returns the plot as SVG text (VARCHAR), rendered natively by ggsql — no vega-lite, no server, no browser. |
+| `pdf` | Returns the plot as PDF bytes. Use the table form `ggsql_run('…')`, which types the column as BLOB. |
+| `hep` | Returns the plot as a `.hep` plot document (ggsql's native format). BLOB from `ggsql_run('…')`. |
+
+The native writers (`svg`/`pdf`/`hep`) take per-session options via `ggsql_writer_options`, a semicolon-separated `key=value` string forwarded to ggsql's writer — shared keys are `width`, `height`, `units`, `dpi`, and `background`, and each writer adds its own (e.g. `embed-fonts` for `svg`). Unknown keys are rejected with an error naming them. The setting must be empty in the browser/spec modes.
 
 ```sql
 -- default: just see the plot, no shell output
@@ -67,10 +72,20 @@ SELECT * FROM range(10) t(x) VISUALISE x, x*x AS y DRAW line;
 SET ggsql_output = 'html';
 COPY (SELECT ggsql('SELECT * FROM range(10) t(x) VISUALISE x, x*x AS y DRAW line')) TO 'plot.html';
 
+-- render natively to SVG, sized via writer options
+SET ggsql_output = 'svg';
+SET ggsql_writer_options = 'width=800;height=600';
+SELECT * FROM range(10) t(x) VISUALISE x, x*x AS y DRAW line;
+
+-- get a PDF back as BLOB (use the table form, which types the column as BLOB)
+SET ggsql_output = 'pdf';
+SET ggsql_writer_options = '';
+SELECT plot FROM ggsql_run('SELECT * FROM range(10) t(x) VISUALISE x, x*x AS y DRAW line');
+
 RESET ggsql_output;  -- back to silent
 ```
 
-In `url`/`spec`/`html` modes the result column is named `plot`, so wrapper queries (`SELECT plot FROM …`) keep working when the mode is toggled.
+In every non-silent mode the result column is named `plot`, so wrapper queries (`SELECT plot FROM …`) keep working when the mode is toggled.
 
 ## Session sharing (current limitation)
 

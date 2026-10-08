@@ -49,24 +49,28 @@ typedef struct ggsql_reader_bridge {
     ggsql_free_buffer_fn  free_buffer;
 } ggsql_reader_bridge_t;
 
-// Output modes. Must match the switch in rust/src/lib.rs.
-#define GGSQL_MODE_URL    0  // register spec + open browser + return plot URL
-#define GGSQL_MODE_SPEC   1  // return raw vega-lite JSON; no HTTP server, no browser
-#define GGSQL_MODE_HTML   2  // return a self-contained HTML document (vendored assets inlined)
-#define GGSQL_MODE_SILENT 3  // register + open browser but return empty payload
-
 // Run a ggsql query end-to-end.
-//   query      : UTF-8 ggsql source (not required to be NUL-terminated)
-//   query_len  : byte length of query
-//   bridge     : initialised bridge; stays valid for the call
-//   mode       : GGSQL_MODE_URL or GGSQL_MODE_SPEC; picks what `out` contains on success.
-//   out        : success payload (URL or vega-lite JSON) or error message on failure.
-//                Caller must release via ggsql_free_buffer.
+//   query       : UTF-8 ggsql source (not required to be NUL-terminated)
+//   query_len   : byte length of query
+//   bridge      : initialised bridge; stays valid for the call
+//   writer      : output path: "silent", "url", "html", "spec" (vega-lite JSON),
+//                 or a native writer: "svg" (UTF-8 text), "pdf" / "hep" (binary)
+//   writer_len  : byte length of writer
+//   options     : "key=value;key=value" writer options for the native writers
+//                 (parsed by ggsql's WriterOptions); must be empty for the
+//                 browser/spec paths
+//   options_len : byte length of options
+//   out         : success payload (text or raw bytes, per writer) or a UTF-8
+//                 error message on failure. Caller must release via
+//                 ggsql_free_buffer.
 int32_t ggsql_execute(
     const char                  *query,
     size_t                       query_len,
     const ggsql_reader_bridge_t *bridge,
-    int32_t                      mode,
+    const char                  *writer,
+    size_t                       writer_len,
+    const char                  *options,
+    size_t                       options_len,
     ggsql_byte_buffer_t         *out);
 
 // Free a buffer that Rust populated. Safe to call on zero-initialised buffers.
