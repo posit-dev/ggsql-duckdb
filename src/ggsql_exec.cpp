@@ -5,12 +5,14 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/execution/expression_executor.hpp"
+#include "duckdb/function/scalar_function.hpp"
 #include "duckdb/main/client_context.hpp"
 
 extern "C" {
 #include "ggsql_ext_rs.h"
 }
 
+#include <fstream>
 #include <string>
 
 namespace duckdb {
@@ -164,6 +166,63 @@ void GgsqlScalarFun(DataChunk &args, ExpressionState &state, Vector &result) {
 		auto payload = RunGgsqlQuery(context, q.GetString(), cfg);
 		return StringVector::AddString(result, payload);
 	});
+}
+
+//===--------------------------------------------------------------------===//
+// Save form: SELECT ggsql_save('…', 'path.svg')
+//===--------------------------------------------------------------------===//
+
+// Map a file extension to a writer name. svg/pdf/hep are the native writers;
+// html and json (vega-lite spec) reuse the browser-free legacy paths. Anything
+// else is rejected here so a typo like 'plot.sv' fails before any rendering
+// work happens.
+static string WriterForPath(const string &path) {
+	auto dot = path.find_last_of('.');
+	if (dot == string::npos || dot == path.size() - 1) {
+		throw InvalidInputException("ggsql: cannot infer an output format from '%s' — the path has no extension "
+		                            "(supported: .svg, .pdf, .hep, .html, .json)",
+		                            path);
+	}
+	auto ext = StringUtil::Lower(path.substr(dot + 1));
+	if (ext == "svg" || ext == "pdf" || ext == "hep" || ext == "html") {
+		return ext;
+	}
+	if (ext == "json") {
+		return "spec";
+	}
+	throw InvalidInputException("ggsql: unsupported output format '.%s' in '%s' (supported: .svg, .pdf, .hep, "
+	                            ".html, .json)",
+	                            ext, path);
+}
+
+void GgsqlSaveFun(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &context = state.GetContext();
+	// Writer options still come from the session setting; only the writer
+	// itself is taken from the path, so `SET ggsql_writer_options = 'width=…'`
+	// affects saved output exactly as it affects returned output.
+	auto session_cfg = ResolveOutputConfig(context);
+
+	BinaryExecutor::Execute<string_t, string_t, string_t>(
+	    args.data[0], args.data[1], result, args.size(), [&](string_t q, string_t p) {
+		    auto path = p.GetString();
+		    OutputConfig cfg;
+		    cfg.writer = WriterForPath(path);
+		    cfg.binary = cfg.writer == "pdf" || cfg.writer == "hep";
+		    cfg.options = session_cfg.options;
+
+		    auto payload = RunGgsqlQuery(context, q.GetString(), cfg);
+
+		    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+		    if (!file) {
+			    throw IOException("ggsql: cannot open '%s' for writing", path);
+		    }
+		    file.write(payload.data(), static_cast<std::streamsize>(payload.size()));
+		    file.close();
+		    if (!file) {
+			    throw IOException("ggsql: failed while writing '%s'", path);
+		    }
+		    return StringVector::AddString(result, path);
+	    });
 }
 
 } // namespace duckdb

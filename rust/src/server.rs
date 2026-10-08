@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use base64::Engine;
 use once_cell::sync::OnceCell;
 use tiny_http::{Header, Response, Server};
 
@@ -13,7 +14,7 @@ static SERVER: OnceCell<ServerHandle> = OnceCell::new();
 const TAB_ALIVE_WINDOW: Duration = Duration::from_secs(5);
 
 struct State {
-    specs: Mutex<HashMap<String, String>>,
+    plots: Mutex<HashMap<String, Vec<u8>>>,
     latest: Mutex<Option<String>>,
     // Last time a client pinged /api/latest. Used as a "tab alive" heartbeat — the
     // SPA's existing poll loop doubles as liveness signal without a separate endpoint.
@@ -25,7 +26,7 @@ struct ServerHandle {
     state: Arc<State>,
 }
 
-/// Returned from [`register_spec`]. `plot_url` is the stable, per-plot URL (shareable,
+/// Returned from [`register_plot`]. `plot_url` is the stable, per-plot URL (shareable,
 /// deep-linkable). `open_url` is what should be handed to the OS-level `open`. The
 /// caller should only spawn a browser when `should_open` is true — otherwise the
 /// existing tab will pick up the new plot via its poll loop and spawning another one
@@ -36,18 +37,18 @@ pub struct Registered {
     pub should_open: bool,
 }
 
-/// Register a vega-lite spec JSON; return URLs for display and browser-open.
-pub fn register_spec(spec_json: String) -> Result<Registered, String> {
+/// Register a .hep plot document; return URLs for display and browser-open.
+pub fn register_plot(hep: Vec<u8>) -> Result<Registered, String> {
     let handle = SERVER.get_or_try_init(start_server)?;
     let id = uuid::Uuid::new_v4().to_string();
 
     {
-        let mut specs = handle
+        let mut plots = handle
             .state
-            .specs
+            .plots
             .lock()
-            .map_err(|e| format!("spec registry poisoned: {}", e))?;
-        specs.insert(id.clone(), spec_json);
+            .map_err(|e| format!("plot registry poisoned: {}", e))?;
+        plots.insert(id.clone(), hep);
     }
     {
         let mut latest = handle
@@ -92,7 +93,7 @@ fn start_server() -> Result<ServerHandle, String> {
     let base_url = format!("http://{}:{}", addr.ip(), addr.port());
 
     let state = Arc::new(State {
-        specs: Mutex::new(HashMap::new()),
+        plots: Mutex::new(HashMap::new()),
         latest: Mutex::new(None),
         last_poll: Mutex::new(None),
     });
@@ -115,12 +116,13 @@ fn serve_loop(server: Server, state: Arc<State>) {
     }
 }
 
-// Vendored assets — see rust/assets/README.md for versions and upgrade instructions.
-// Embedded at compile time so plots render offline (no CDN fetches).
-// Kept as &str (not bytes) so they can also be inlined into self-contained HTML output.
-const VEGA_JS: &str = include_str!("../assets/vega.min.js");
-const VEGA_LITE_JS: &str = include_str!("../assets/vega-lite.min.js");
-const VEGA_EMBED_JS: &str = include_str!("../assets/vega-embed.min.js");
+// Vendored assets — see rust/assets/README.md for provenance and upgrade
+// instructions. Embedded at compile time so plots render offline (no CDN
+// fetches). hep-assets.js sets globalThis.ggsqlHepAssets (the wasm binary and
+// Roboto faces, gzip+base64); hep-viewer.js is the IIFE viewer that consumes
+// it. Both also inline into self-contained HTML output.
+const HEP_ASSETS_JS: &str = include_str!("../assets/hep-assets.js");
+const HEP_VIEWER_JS: &str = include_str!("../assets/hep-viewer.js");
 
 fn route(url: &str, state: &Arc<State>) -> Response<std::io::Cursor<Vec<u8>>> {
     // Strip query string for path matching.
@@ -128,15 +130,14 @@ fn route(url: &str, state: &Arc<State>) -> Response<std::io::Cursor<Vec<u8>>> {
 
     // Static assets.
     match path {
-        "/assets/vega.min.js" => return js_response(VEGA_JS.as_bytes()),
-        "/assets/vega-lite.min.js" => return js_response(VEGA_LITE_JS.as_bytes()),
-        "/assets/vega-embed.min.js" => return js_response(VEGA_EMBED_JS.as_bytes()),
+        "/assets/hep-assets.js" => return js_response(HEP_ASSETS_JS.as_bytes()),
+        "/assets/hep-viewer.js" => return js_response(HEP_VIEWER_JS.as_bytes()),
         _ => {}
     }
 
     // JSON API.
     if path == "/api/latest" {
-        // Treat every /api/latest hit as a heartbeat — so register_spec can tell
+        // Treat every /api/latest hit as a heartbeat — so register_plot can tell
         // whether an existing browser tab is still alive.
         mark_poll(state);
         let latest = state.latest.lock().ok().and_then(|g| g.clone());
@@ -146,11 +147,11 @@ fn route(url: &str, state: &Arc<State>) -> Response<std::io::Cursor<Vec<u8>>> {
         };
         return json_response(body);
     }
-    if let Some(rest) = path.strip_prefix("/api/spec/") {
+    if let Some(rest) = path.strip_prefix("/api/plot/") {
         let id = rest.trim_end_matches('/');
-        let spec = state.specs.lock().ok().and_then(|m| m.get(id).cloned());
-        return match spec {
-            Some(body) => json_response(body),
+        let plot = state.plots.lock().ok().and_then(|m| m.get(id).cloned());
+        return match plot {
+            Some(bytes) => binary_response(bytes),
             None => not_found(),
         };
     }
@@ -198,26 +199,38 @@ fn js_response(body: &[u8]) -> Response<std::io::Cursor<Vec<u8>>> {
         .with_header(cache)
 }
 
+fn binary_response(body: Vec<u8>) -> Response<std::io::Cursor<Vec<u8>>> {
+    let content_type = Header::from_bytes(
+        &b"Content-Type"[..],
+        &b"application/octet-stream"[..],
+    )
+    .expect("static header bytes");
+    let cache =
+        Header::from_bytes(&b"Cache-Control"[..], &b"no-store"[..]).expect("static header bytes");
+    Response::from_data(body)
+        .with_header(content_type)
+        .with_header(cache)
+}
+
 fn not_found() -> Response<std::io::Cursor<Vec<u8>>> {
     Response::from_string("not found").with_status_code(404)
 }
 
-// The single-page app shell. No spec is inlined; the client reads its own URL, fetches
-// the spec from /api/spec/<uuid>, and polls /api/latest so that new plots appear in the
-// same tab. history.pushState gives us working back/forward.
+// The single-page app shell. No plot is inlined; the client reads its own URL, fetches
+// the .hep document from /api/plot/<uuid>, and polls /api/latest so that new plots
+// appear in the same tab. history.pushState gives us working back/forward.
 fn app_shell() -> String {
     include_str!("../assets/app.html").to_string()
 }
 
-/// Build a fully self-contained HTML document: vega + vega-lite + vega-embed inlined
-/// from the vendored bundles, plus the spec embedded as JSON. No network needed to
-/// render. Used by `ggsql_output = 'html'`.
-///
-/// Safety note: none of the vendored minified bundles contain the literal byte sequence
-/// `</script`, so inlining them inside `<script>…</script>` is safe. A re-bundle that
-/// breaks that invariant would be caught at build time if we add a test; for now, see
-/// the check in rust/assets/README.md.
-pub fn standalone_html(spec_json: &str) -> String {
+/// Build a fully self-contained HTML document from a .hep plot document: the
+/// viewer bundle and the wasm/font assets inlined (both already ASCII-safe
+/// JS/base64), plus the plot itself as base64. No network needed to render.
+/// Used by `ggsql_output = 'html'` and by `ggsql_save(…, 'plot.html')`.
+pub fn standalone_html(hep: &[u8]) -> String {
+    // Base64 is drawn from [A-Za-z0-9+/=], so the payload can never contain a
+    // `</script>` breakout sequence.
+    let doc_b64 = base64::engine::general_purpose::STANDARD.encode(hep);
     format!(
         r##"<!doctype html>
 <html lang="en">
@@ -227,27 +240,23 @@ pub fn standalone_html(spec_json: &str) -> String {
 <style>
   html, body {{ margin: 0; padding: 0; height: 100%; background: #fff; font-family: system-ui, sans-serif; }}
   body {{ display: flex; flex-direction: column; height: 100vh; }}
-  /* ggsql emits width:"container" / height:"container" — the parent must have explicit
-     dimensions. Make #vis a flex:1 child of the body so it fills the viewport. */
+  /* PlotView sizes to its container via a ResizeObserver — give it a flex:1
+     child of the body so it fills the viewport. */
   #vis {{ flex: 1; min-height: 0; padding: 1rem; box-sizing: border-box; }}
 </style>
-<script>{vega}</script>
-<script>{vl}</script>
-<script>{embed}</script>
+<script>{assets}</script>
+<script>{viewer}</script>
 </head>
 <body>
 <div id="vis"></div>
-<script id="spec" type="application/json">{spec}</script>
 <script>
-  const spec = JSON.parse(document.getElementById("spec").textContent);
-  vegaEmbed("#vis", spec, {{ renderer: "canvas", actions: true }});
+  const bytes = Uint8Array.from(atob("{doc}"), (c) => c.charCodeAt(0));
+  window.ggsqlRenderHep(document.getElementById("vis"), bytes);
 </script>
 </body>
 </html>"##,
-        vega = VEGA_JS,
-        vl = VEGA_LITE_JS,
-        embed = VEGA_EMBED_JS,
-        // Neutralise any `</script>` in the spec that would break out of the JSON island.
-        spec = spec_json.replace("</", r"<\/"),
+        assets = HEP_ASSETS_JS,
+        viewer = HEP_VIEWER_JS,
+        doc = doc_b64,
     )
 }

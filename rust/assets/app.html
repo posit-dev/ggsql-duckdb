@@ -13,9 +13,8 @@
   #status { padding: 0.25rem 1rem; color: #888; font-size: 0.8rem; text-align: right; border-top: 1px solid #eee; }
   #status.error { color: #c0392b; }
 </style>
-<script src="/assets/vega.min.js"></script>
-<script src="/assets/vega-lite.min.js"></script>
-<script src="/assets/vega-embed.min.js"></script>
+<script src="/assets/hep-assets.js"></script>
+<script src="/assets/hep-viewer.js"></script>
 </head>
 <body>
 <main>
@@ -40,7 +39,7 @@
   // fight the user.
   let currentUuid = null;
   let latestKnown = null;
-  let embedResult = null;
+  let view = null;
 
   const setStatus = (text, isError) => {
     status.textContent = text;
@@ -56,9 +55,9 @@
     return p ? p[1] : null;
   };
 
-  async function renderSpec(uuid) {
+  async function renderPlot(uuid) {
     if (uuid === currentUuid) return;
-    const resp = await fetch(`/api/spec/${encodeURIComponent(uuid)}`);
+    const resp = await fetch(`/api/plot/${encodeURIComponent(uuid)}`);
     if (!resp.ok) {
       empty.hidden = false;
       vis.hidden = true;
@@ -66,11 +65,15 @@
       setStatus("ggsql · not found", true);
       return;
     }
-    const spec = await resp.json();
+    const bytes = new Uint8Array(await resp.arrayBuffer());
     empty.hidden = true;
     vis.hidden = false;
-    if (embedResult && embedResult.finalize) embedResult.finalize();
-    embedResult = await vegaEmbed(vis, spec, { renderer: "canvas", actions: true });
+    // Free the previous view and clear its markup before rendering into the
+    // same container — PlotView leaves existing content alone until it has a
+    // replacement, so a stale plot would linger otherwise.
+    if (view) { view.free(); view = null; }
+    vis.replaceChildren();
+    view = await window.ggsqlRenderHep(vis, bytes);
     currentUuid = uuid;
     setStatus(`ggsql · plot ${uuid.slice(0, 8)}`, false);
   }
@@ -83,7 +86,7 @@
         history.replaceState(null, "", `/#plot/${locUuid}`);
       }
       try {
-        await renderSpec(locUuid);
+        await renderPlot(locUuid);
       } catch (e) {
         setStatus(`ggsql · ${e}`, true);
       }
@@ -95,7 +98,7 @@
       if (uuid) {
         history.replaceState(null, "", `#plot/${uuid}`);
         latestKnown = uuid;
-        await renderSpec(uuid);
+        await renderPlot(uuid);
       } else {
         vis.hidden = true;
         empty.hidden = false;
@@ -123,7 +126,7 @@
               history.pushState(null, "", `#plot/${uuid}`);
             }
             latestKnown = uuid;
-            await renderSpec(uuid);
+            await renderPlot(uuid);
           }
         }
       } catch (_) { /* transient — keep polling */ }

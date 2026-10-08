@@ -608,6 +608,7 @@ name = "ggsql_ext_rs"
 version = "0.1.0"
 dependencies = [
  "arrow",
+ "base64",
  "ggsql",
  "once_cell",
  "open",

@@ -20,11 +20,12 @@ use crate::reader::CallbackReader;
 /// Execute a ggsql query end-to-end: parse → SQL-via-bridge → render with the
 /// requested writer.
 ///
-/// `writer` names the output path: the browser-backed pseudo-writers `silent`,
-/// `url`, and `html`, the raw `spec` (vega-lite JSON), or one of the native
-/// writers `svg`, `pdf`, `hep`. `options` is a `key=value;key=value` string
-/// parsed by ggsql's `WriterOptions` and handed to the native writer's
-/// `from_options`; it must be empty for the browser/spec paths.
+/// `writer` names the output path: the browser display modes `silent` and
+/// `url` (rendered as .hep and served over HTTP), `html` (a self-contained
+/// document with the hep viewer inlined), the raw `spec` (vega-lite JSON), or
+/// one of the native writers `svg`, `pdf`, `hep`. `options` is a
+/// `key=value;key=value` string parsed by ggsql's `WriterOptions` and handed
+/// to the native writer's `from_options`; it must be empty for `spec`.
 ///
 /// On success, `out` holds the writer's payload (text for svg/spec/html/url,
 /// raw bytes for pdf/hep, empty for silent). On failure, `out` holds a UTF-8
@@ -50,7 +51,8 @@ pub unsafe extern "C" fn ggsql_execute(
     options_len: usize,
     out: *mut ByteBuffer,
 ) -> c_int {
-    if query.is_null() || bridge.is_null() || writer.is_null() || options.is_null() || out.is_null() {
+    if query.is_null() || bridge.is_null() || writer.is_null() || options.is_null() || out.is_null()
+    {
         return 1;
     }
     *out = ByteBuffer::EMPTY;
@@ -123,18 +125,32 @@ fn run(
         "svg" => render_with::<SvgWriter>(&spec, options),
         "pdf" => render_with::<PdfWriter>(&spec, options),
         "hep" => render_with::<HepWriter>(&spec, options),
-        "spec" | "html" | "url" | "silent" => {
-            // The browser/vega-lite paths predate writer options; accepting a
-            // stray option here would silently ignore it, which is worse than
-            // an error.
+        "html" => {
+            // Self-contained document: the plot as .hep with the viewer bundle
+            // and wasm/font assets inlined. Same rendering as the browser
+            // display, so saved HTML matches what the user sees interactively.
+            let hep = render_with::<HepWriter>(&spec, options)?;
+            Ok(server::standalone_html(&hep).into_bytes())
+        }
+        "url" | "silent" => {
+            let hep = render_with::<HepWriter>(&spec, options)?;
+            serve_plot(hep, writer)
+        }
+        "spec" => {
+            // The vega-lite path predates writer options; accepting a stray
+            // option here would silently ignore it, which is worse than an
+            // error.
             if !options.trim().is_empty() {
-                return Err(format!(
-                    "ggsql: ggsql_writer_options only apply to the 'svg', 'pdf', and 'hep' \
-                     output formats (got ggsql_output = '{}')",
-                    writer
-                ));
+                return Err(
+                    "ggsql: ggsql_writer_options does not apply to the 'spec' output mode \
+                     (options are for the native writers and the browser display)"
+                        .to_string(),
+                );
             }
-            run_vegalite(&spec, writer)
+            let json = VegaLiteWriter::new()
+                .render(&spec)
+                .map_err(|e| format!("ggsql: render failed: {}", e))?;
+            Ok(json.into_bytes())
         }
         _ => Err(format!("ggsql: unknown writer '{}'", writer)),
     }
@@ -157,34 +173,24 @@ where
         .map_err(|e| format!("ggsql: render failed: {}", e))
 }
 
-fn run_vegalite(spec: &ggsql::reader::Spec, mode: &str) -> Result<Vec<u8>, String> {
-    let json = VegaLiteWriter::new()
-        .render(spec)
-        .map_err(|e| format!("ggsql: render failed: {}", e))?;
+/// Register a .hep document with the plot server and open a browser tab if
+/// none is alive. `url` returns the deep link; `silent` returns nothing (the
+/// C++ side suppresses the row).
+fn serve_plot(hep: Vec<u8>, mode: &str) -> Result<Vec<u8>, String> {
+    let registered =
+        server::register_plot(hep).map_err(|e| format!("ggsql: serve failed: {}", e))?;
+
+    // Only spawn a browser when the server believes no tab is currently alive.
+    // An already-open tab will see the new plot via its poll loop and advance
+    // in place; opening another tab on every query piles up windows. See
+    // `register_plot` for the heartbeat logic. Env var still wins for tests/CI.
+    if registered.should_open && std::env::var_os("GGSQL_NO_OPEN_BROWSER").is_none() {
+        let _ = open::that(&registered.open_url);
+    }
 
     match mode {
-        "spec" => Ok(json.into_bytes()),
-        "html" => Ok(server::standalone_html(&json).into_bytes()),
-        "url" | "silent" => {
-            let registered =
-                server::register_spec(json).map_err(|e| format!("ggsql: serve failed: {}", e))?;
-
-            // Only spawn a browser when the server believes no tab is currently alive.
-            // An already-open tab will see the new plot via its poll loop and advance
-            // in place; opening another tab on every query piles up windows. See
-            // `register_spec` for the heartbeat logic. Env var still wins for tests/CI.
-            if registered.should_open && std::env::var_os("GGSQL_NO_OPEN_BROWSER").is_none() {
-                let _ = open::that(&registered.open_url);
-            }
-
-            match mode {
-                "url" => Ok(registered.plot_url.into_bytes()),
-                // Silent: the browser side-effect has happened; the C++ side will
-                // suppress the row so the user sees an empty result set.
-                "silent" => Ok(Vec::new()),
-                _ => unreachable!(),
-            }
-        }
+        "url" => Ok(registered.plot_url.into_bytes()),
+        "silent" => Ok(Vec::new()),
         _ => unreachable!(),
     }
 }

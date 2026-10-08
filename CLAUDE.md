@@ -1,6 +1,6 @@
 # ggsql-duckdb
 
-DuckDB extension that routes `VISUALISE`/`VISUALIZE` statements through the Rust [ggsql](https://ggsql.org) engine, rendering vega-lite charts. Built on the DuckDB extension template.
+DuckDB extension that routes `VISUALISE`/`VISUALIZE` statements through the Rust [ggsql](https://ggsql.org) engine, rendering with ggsql's native hephaestus renderer (vega-lite remains only as the `spec` escape hatch). Built on the DuckDB extension template.
 
 ## Layout
 
@@ -14,11 +14,11 @@ src/                    C++ extension: ParserExtension, scalar+table funcs, FFI 
 rust/                   Rust staticlib linked into the extension
   src/lib.rs            `ggsql_execute` C entrypoint; dispatches on output mode
   src/reader.rs         `CallbackReader` impls ggsql::Reader via the C++ bridge
-  src/server.rs         tiny_http singleton serving the SPA + vega assets
+  src/server.rs         tiny_http singleton serving the SPA + hep viewer assets + .hep documents
   src/ffi.rs            C ABI types (ByteBuffer, ReaderBridge)
   src/dialect.rs        DuckDbDialect, inlined from ggsql (see comment below)
   include/ggsql_ext_rs.h  Hand-rolled C header; must track ffi.rs
-  assets/               Vendored vega/vega-lite/vega-embed bundles + SPA shell
+  assets/               Vendored hep viewer bundle + wasm/font assets (built by tools/hep-viewer) + SPA shell
 test/sql/ggsql.test     SQL logic tests — run with GGSQL_NO_OPEN_BROWSER=1
 duckdb/, extension-ci-tools/  Submodules; versions bumped per release (see docs/UPDATING.md)
 ```
@@ -37,8 +37,9 @@ Two entry points, both funnel into the same Rust `ggsql_execute`:
 
 - **ParserExtension** — any statement containing a top-level `VISUALISE`/`VISUALIZE` keyword is claimed and planned as a call to the `ggsql_run` table function. The scanner in `ggsql_parser.cpp` is hand-rolled: it skips `'...'`, `"..."`, `--` line comments and `/* */` block comments, and matches only at word boundaries. A trailing `;` is stripped because ggsql's tree-sitter grammar rejects it.
 - **Scalar** — `SELECT ggsql('<query>')` runs the same pipeline with the string as input.
+- **Save scalar** — `SELECT ggsql_save('<query>', '<path>')` infers the writer from the file extension (.svg/.pdf/.hep/.html/.json), applies `ggsql_writer_options`, ignores `ggsql_output`, writes the file in C++ (`std::ofstream`), and returns the path.
 
-Output mode is session-scoped via the `ggsql_output` setting (`silent` default / `url` / `spec` / `html` / `svg` / `pdf` / `hep`). The result column is always named `plot` — don't rename it. Unknown values throw at bind time. `silent` emits zero rows; `url` emits one; `spec`/`html` return the bytes and do not start the HTTP server or open a browser. `svg`/`pdf`/`hep` are ggsql's native hephaestus-backed writers (no vega-lite, no server): `svg` returns VARCHAR, `pdf`/`hep` return binary — `ggsql_run` types their column as BLOB, the scalar stays VARCHAR. `ggsql_writer_options` is a `key=value;…` string forwarded verbatim to ggsql's `WriterOptions` (shared keys: width/height/units/dpi/background); it must be empty for the browser/spec modes — the Rust side errors otherwise.
+Output mode is session-scoped via the `ggsql_output` setting (`silent` default / `url` / `spec` / `html` / `svg` / `pdf` / `hep`). The result column is always named `plot` — don't rename it. Unknown values throw at bind time. `silent` emits zero rows; `url` emits one; `spec`/`html` return the bytes and do not start the HTTP server or open a browser. The browser display (`silent`/`url`) renders a .hep document with the vendored hephaestus-svg-wasm viewer — the same renderer as the `svg`/`pdf`/`hep` writers, so display and file output match. `svg` returns VARCHAR, `pdf`/`hep` return binary — `ggsql_run` types their column as BLOB, the scalar stays VARCHAR. `ggsql_writer_options` is a `key=value;…` string forwarded verbatim to ggsql's `WriterOptions` (shared keys: width/height/units/dpi/background); only `spec` rejects options — the Rust side errors otherwise.
 
 ## FFI contract (C++ ↔ Rust)
 
@@ -66,7 +67,7 @@ The inner `Connection` is created lazily and **persists for the whole `ggsql_exe
 - Spec registry is a `HashMap<uuid, json>` in memory; unbounded (grows for the life of the process).
 - SPA URL form is `http://.../#plot/<uuid>` — the hash matters: browsers treat tabs with different fragments as the same URL for `open::that`, so repeat queries focus the existing tab instead of spawning new ones.
 - `/api/latest` doubles as a liveness heartbeat: if it was polled within `TAB_ALIVE_WINDOW` (5s), `register_spec` sets `should_open=false` and the poll loop in the SPA picks up the new plot via `history.pushState` — no second window. `GGSQL_NO_OPEN_BROWSER` overrides regardless.
-- Vega/vega-lite/vega-embed bundles are `include_str!`'d from `rust/assets/` so plots render offline. `html` mode inlines the same bundles into a single self-contained document. `</` in the spec is escaped to avoid `</script>` breakout.
+- The hep viewer (`hep-viewer.js`, IIFE) and wasm/Roboto assets (`hep-assets.js`, gzip+base64) are built by `tools/hep-viewer/build.mjs` from the `hephaestus-svg-wasm` npm package and `include_str!`'d from `rust/assets/`, so plots render offline. **The npm package version must track the hephaestus crate ggsql links** — the .hep document format version is compared for equality at load time. `html` mode inlines the same two assets plus the base64'd .hep document into a single self-contained file; base64 can't contain `</script>`, so no breakout escaping is needed.
 
 ## Inlined `DuckDbDialect`
 

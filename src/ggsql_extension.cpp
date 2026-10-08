@@ -16,6 +16,12 @@ static void LoadInternal(ExtensionLoader &loader) {
 	ScalarFunction ggsql_scalar("ggsql", {LogicalType::VARCHAR}, LogicalType::VARCHAR, GgsqlScalarFun);
 	loader.RegisterFunction(ggsql_scalar);
 
+	// Save form: SELECT ggsql_save('<query>', 'plot.svg') — the writer is
+	// inferred from the file extension and the payload written to disk.
+	ScalarFunction ggsql_save_scalar("ggsql_save", {LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::VARCHAR,
+	                                 GgsqlSaveFun);
+	loader.RegisterFunction(ggsql_save_scalar);
+
 	// Table-function form, also used by the parser extension's plan. Registered
 	// standalone so binary output modes (pdf/hep) are reachable with their
 	// proper BLOB return type.
@@ -41,15 +47,18 @@ static void LoadInternal(ExtensionLoader &loader) {
 	                          "SVG text; 'pdf' and 'hep' return binary payloads (BLOB from ggsql_run).",
 	                          LogicalType::VARCHAR, Value("silent"));
 
-	// Options for the native writers ('svg'/'pdf'/'hep'), forwarded verbatim to
-	// ggsql's WriterOptions — e.g. 'width=800;height=600;units=px'. Shared keys:
-	// width, height, units, dpi, background; each writer adds its own (svg:
-	// text, embed-fonts, id-prefix; pdf: compress, links; hep: lossy,
-	// embed-fonts). Unknown keys are rejected with an error naming them.
+	// Options for the native writers ('svg'/'pdf'/'hep') and the browser/html
+	// display (which renders through the same hephaestus pipeline), forwarded
+	// verbatim to ggsql's WriterOptions — e.g. 'width=800;height=600;units=px'.
+	// Shared keys: width, height, units, dpi, background; each writer adds its
+	// own (svg: text, embed-fonts, id-prefix; pdf: compress, links; hep: lossy,
+	// embed-fonts). Unknown keys are rejected with an error naming them. Only
+	// 'spec' (raw vega-lite JSON) rejects options outright.
 	config.AddExtensionOption("ggsql_writer_options",
-	                          "Options for the native ggsql writers ('svg', 'pdf', 'hep' output modes), as "
-	                          "semicolon-separated key=value pairs, e.g. 'width=800;height=600'. Shared keys: "
-	                          "width, height, units, dpi, background. Must be empty for the browser/spec modes.",
+	                          "Options for ggsql's writers, as semicolon-separated key=value pairs, e.g. "
+	                          "'width=800;height=600'. Applies to the 'svg', 'pdf', 'hep', 'html' modes and the "
+	                          "browser display; must be empty for 'spec'. Shared keys: width, height, units, "
+	                          "dpi, background.",
 	                          LogicalType::VARCHAR, Value(""));
 }
 

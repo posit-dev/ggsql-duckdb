@@ -9,3 +9,4 @@ rust/target
 .cache
 .claude
 .format-tools
+tools/hep-viewer/node_modules

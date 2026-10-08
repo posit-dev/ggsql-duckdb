@@ -1,6 +1,6 @@
 # ggsql DuckDB extension
 
-A DuckDB extension that routes `VISUALISE`/`VISUALIZE` statements through the [ggsql](https://ggsql.org) engine and renders vega-lite charts. The chart is served from an in-process HTTP server and opened in your default browser.
+A DuckDB extension that routes `VISUALISE`/`VISUALIZE` statements through the [ggsql](https://ggsql.org) engine and renders plots with ggsql's native hephaestus renderer. The plot is served from an in-process HTTP server and opened in your default browser — the same renderer that produces the `svg`/`pdf`/`hep` output, so what you see is what you save.
 
 ## Building
 
@@ -48,12 +48,22 @@ Use the session setting `ggsql_output` to choose what a query produces:
 | `silent` *(default)* | Opens the default browser; the `VISUALISE` statement produces **no result set at all**. Good for interactive use — you see the plot, the shell doesn't spam a URL at you. |
 | `url` | Opens the browser and returns the plot URL in a 1×1 result. Good for scripts that want the URL. |
 | `spec` | Returns the raw vega-lite JSON as VARCHAR. No HTTP server, no browser. Good for piping to other tools. |
-| `html` | Returns a self-contained HTML document (~830 KB — vega + vega-lite + vega-embed inlined from the vendored bundles, plus the spec). No HTTP server, no browser. Good for saving a shareable snapshot: `COPY (SELECT ggsql('…')) TO 'plot.html'`. |
+| `html` | Returns a self-contained HTML document (~1.9 MB — the .hep plot document plus the hephaestus wasm viewer and Roboto faces inlined). No HTTP server, no browser. Same rendering as the interactive display, so a saved snapshot looks identical: `COPY (SELECT ggsql('…')) TO 'plot.html'`. |
 | `svg` | Returns the plot as SVG text (VARCHAR), rendered natively by ggsql — no vega-lite, no server, no browser. |
 | `pdf` | Returns the plot as PDF bytes. Use the table form `ggsql_run('…')`, which types the column as BLOB. |
 | `hep` | Returns the plot as a `.hep` plot document (ggsql's native format). BLOB from `ggsql_run('…')`. |
 
-The native writers (`svg`/`pdf`/`hep`) take per-session options via `ggsql_writer_options`, a semicolon-separated `key=value` string forwarded to ggsql's writer — shared keys are `width`, `height`, `units`, `dpi`, and `background`, and each writer adds its own (e.g. `embed-fonts` for `svg`). Unknown keys are rejected with an error naming them. The setting must be empty in the browser/spec modes.
+The native writers (`svg`/`pdf`/`hep`) — and the `html` and browser display modes, which render through the same pipeline — take per-session options via `ggsql_writer_options`, a semicolon-separated `key=value` string forwarded to ggsql's writer. Shared keys are `width`, `height`, `units`, `dpi`, and `background`, and each writer adds its own (e.g. `embed-fonts` for `svg`). Unknown keys are rejected with an error naming them. Only `spec` mode rejects options outright (it's raw vega-lite JSON, a different backend kept as an escape hatch).
+
+### Saving to a file (`ggsql_save`)
+
+`ggsql_save(query, path)` renders a query straight to a file; the writer is inferred from the extension (`.svg`, `.pdf`, `.hep`, `.html`, `.json` for the raw vega-lite spec), `ggsql_writer_options` applies, and the `ggsql_output` mode is ignored. It returns the path.
+
+```sql
+SET ggsql_writer_options = 'width=800;height=600';
+SELECT ggsql_save('SELECT * FROM range(10) t(x) VISUALISE x, x*x AS y DRAW line', 'plot.svg');
+SELECT ggsql_save('SELECT * FROM range(10) t(x) VISUALISE x, x*x AS y DRAW line', 'plot.pdf');
+```
 
 ```sql
 -- default: just see the plot, no shell output

@@ -1,0 +1,13 @@
+{
+  "name": "ggsql-duckdb-hep-viewer",
+  "private": true,
+  "type": "module",
+  "description": "Builds the vendored hep viewer assets in rust/assets/. Run `npm install && npm run build` when hephaestus-svg-wasm needs to move (it must track the hephaestus crate ggsql links).",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "hephaestus-svg-wasm": "^0.4.1"
+  }
+}

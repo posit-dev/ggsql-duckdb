@@ -55,7 +55,8 @@ SELECT ggsql('SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point')
 ----
 true
 
-# 'html' mode — returns a self-contained HTML document with inlined vega bundles.
+# 'html' mode — returns a self-contained HTML document rendering the .hep plot
+# document with the inlined hephaestus wasm viewer.
 statement ok
 SET ggsql_output = 'html';
 
@@ -65,10 +66,16 @@ SELECT ggsql('SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point')
 ----
 true
 
-# The inlined bundle should make the HTML payload much larger than the raw spec.
-# (~800 KB for the JS bundles; a bare spec is < 5 KB.)
 query I
-SELECT length(ggsql('SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point')) > 500000;
+SELECT ggsql('SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point')
+  LIKE '%ggsqlRenderHep%';
+----
+true
+
+# The inlined viewer + wasm/font assets should make the HTML payload large.
+# (~1.9 MB of viewer/assets; a bare .hep document is a few KB.)
+query I
+SELECT length(ggsql('SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point')) > 1000000;
 ----
 true
 
@@ -105,7 +112,8 @@ SELECT ggsql('SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point');
 ----
 unknown writer option
 
-# Options must not be silently ignored by the vega-lite/browser modes.
+# Options must not be silently ignored by the vega-lite 'spec' mode (they do
+# apply to the browser display, which renders through hephaestus).
 statement ok
 SET ggsql_output = 'spec';
 SET ggsql_writer_options = 'width=100';
@@ -113,7 +121,7 @@ SET ggsql_writer_options = 'width=100';
 statement error
 SELECT ggsql('SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point');
 ----
-only apply to
+does not apply
 
 statement ok
 RESET ggsql_writer_options;
@@ -136,6 +144,51 @@ query I
 SELECT octet_length(plot) > 100 FROM ggsql_run('SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point');
 ----
 true
+
+# --------------------------------------------------------------------------------
+# ggsql_save(query, path): the writer is inferred from the file extension and
+# the payload written to disk. ggsql_output does not apply; ggsql_writer_options
+# does.
+# --------------------------------------------------------------------------------
+statement ok
+RESET ggsql_output;
+
+statement ok
+SET ggsql_writer_options = 'width=432';
+
+# Saving to .svg writes SVG markup (sized by the writer options) and returns
+# the path.
+query I
+SELECT ggsql_save('SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point', '__TEST_DIR__/ggsql_save_test.svg')
+  LIKE '%ggsql_save_test.svg';
+----
+true
+
+query I
+SELECT content LIKE '%<svg%432%' FROM read_text('__TEST_DIR__/ggsql_save_test.svg');
+----
+true
+
+# Saving to .pdf writes binary PDF.
+query I
+SELECT ggsql_save('SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point', '__TEST_DIR__/ggsql_save_test.pdf')
+  LIKE '%ggsql_save_test.pdf';
+----
+true
+
+query I
+SELECT substr(hex(content), 1, 8) = '25504446' FROM read_blob('__TEST_DIR__/ggsql_save_test.pdf');
+----
+true
+
+# Unknown extensions are rejected before any rendering happens.
+statement error
+SELECT ggsql_save('SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point', '__TEST_DIR__/plot.bmp');
+----
+unsupported output format
+
+statement ok
+RESET ggsql_writer_options;
 
 # Unknown mode values should surface a clear error rather than silently falling back.
 statement ok

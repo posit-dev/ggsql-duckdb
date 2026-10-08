@@ -24,7 +24,7 @@ build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
 build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
 
 # -----------------------------------------------------------------------------
-# Rust side (ggsql_ext_rs staticlib — embeds ggsql + the vega-lite HTTP server)
+# Rust side (ggsql_ext_rs staticlib — embeds ggsql + the plot HTTP server)
 # -----------------------------------------------------------------------------
 set(GGSQL_RUST_DIR ${CMAKE_CURRENT_SOURCE_DIR}/rust)
 set(GGSQL_RUST_BUILD_DIR ${CMAKE_CURRENT_BINARY_DIR}/rust-target)
