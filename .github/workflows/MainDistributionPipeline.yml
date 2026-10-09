@@ -11,11 +11,19 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' && github.sha || '' }}
   cancel-in-progress: true
 
+env:
+  # Single source of truth for the DuckDB/extension-ci-tools version.
+  # The `uses:` refs below still pin the tag literally (expressions are not
+  # allowed there), so bump those alongside this.
+  DUCKDB_VERSION: v1.5.6
+
 jobs:
   duckdb-stable-build:
     name: Build extension binaries
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.5.6
     with:
+      # env context is not allowed in reusable-workflow inputs — keep in sync
+      # with DUCKDB_VERSION above
       duckdb_version: v1.5.6
       ci_tools_version: v1.5.6
       extension_name: ggsql
@@ -26,7 +34,32 @@ jobs:
     name: Code Quality Check
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@v1.5.6
     with:
+      # env context is not allowed in reusable-workflow inputs — keep in sync
+      # with DUCKDB_VERSION above
       duckdb_version: v1.5.6
       ci_tools_version: v1.5.6
       extension_name: ggsql
       format_checks: 'format;tidy'
+
+  interrupt-tests:
+    name: Embedded connection interruption tests
+    needs: duckdb-stable-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: ggsql-${{ env.DUCKDB_VERSION }}-extension-linux_amd64
+          path: build/interrupt-tests
+      - name: Install test dependencies
+        # Strip the leading "v" for the pip version specifier
+        run: python -m pip install "duckdb==${DUCKDB_VERSION#v}" numpy
+      - name: Test interruption through the Python client
+        env:
+          GGSQL_EXTENSION_PATH: ${{ github.workspace }}/build/interrupt-tests/ggsql.duckdb_extension
+          GGSQL_NO_OPEN_BROWSER: '1'
+        run: python -m unittest discover -s test/python -v

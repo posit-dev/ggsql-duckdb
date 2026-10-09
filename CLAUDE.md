@@ -30,6 +30,7 @@ duckdb/, extension-ci-tools/  Submodules; versions bumped per release (see docs/
 - CMake drives `cargo build --release` via a custom command; Rust sources + `assets/*` are listed as dependencies so edits trigger rebuilds.
 - macOS links `CoreFoundation`, `Security`, `SystemConfiguration` (needed by Rust std / tiny_http TLS bits).
 - DuckDB target version is set in three places — keep them in sync: `.github/workflows/MainDistributionPipeline.yml` (`duckdb_version`, `ci_tools_version`, workflow `@` tag) and the `duckdb` + `extension-ci-tools` submodule refs. `docs/UPDATING.md` has the full checklist.
+- The workflow's embedded interruption tests must use the matching Python DuckDB version and distribution artifact name when bumping DuckDB.
 
 ## User-visible surface
 
@@ -60,6 +61,15 @@ Every ggsql call opens a **sibling `Connection` on the same `DatabaseInstance`**
 **Reason**: calling `ClientContext::Query` re-entrantly from inside an executing table function deadlocks on the context's mutex. We open a sibling `Connection` to sidestep it. This is documented in the README under "Session sharing (current limitation)". Revisit only when ggsql stops requiring recursive SQL callbacks.
 
 The inner `Connection` is created lazily and **persists for the whole `ggsql_execute` call**, so temp tables created by one `exec_sql` call (e.g. ggsql's CTE materialisation, which now goes through `execute_sql(create_or_replace_temp_table_sql(...))`) remain visible to subsequent `exec_sql` calls within the same invocation.
+
+`BridgeCtx` also owns an interrupt-forwarding thread, started with the inner connection.
+It polls the outer context every 10 ms and calls the inner connection's `Interrupt()`;
+these operations only access DuckDB's atomic interrupt flags, never the context locks.
+Keep forwarding after cancellation because each new inner query resets its flag.
+The forwarder must stop and join before the connection is destroyed. SQL callbacks
+and Arrow stream callbacks also check cancellation, and `RunGgsqlQuery` restores the
+DuckDB `InterruptException` type after freeing the Rust result buffer. Regression
+tests in `test/python/test_interrupt.py` exercise cancellation from another thread.
 
 ## HTTP server
 

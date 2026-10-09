@@ -60,8 +60,10 @@ OutputConfig ResolveOutputConfig(ClientContext &context) {
 // payload on success (text for url/spec/html/svg, raw bytes for pdf/hep, empty
 // for silent).
 string RunGgsqlQuery(ClientContext &context, const string &query, const OutputConfig &cfg) {
-	BridgeCtx bctx;
-	bctx.outer = &context;
+	if (context.IsInterrupted()) {
+		throw InterruptException();
+	}
+	BridgeCtx bctx(context);
 	auto bridge = BuildReaderBridge(bctx);
 
 	ggsql_byte_buffer_t out;
@@ -77,6 +79,12 @@ string RunGgsqlQuery(ClientContext &context, const string &query, const OutputCo
 	}
 	ggsql_free_buffer(&out);
 
+	// The Rust/Arrow bridge transports errors as strings. Restore DuckDB's
+	// interruption type after releasing the FFI buffer, rather than reporting it
+	// as invalid input (or returning a result after cancellation).
+	if (context.IsInterrupted()) {
+		throw InterruptException();
+	}
 	if (rc != 0) {
 		throw InvalidInputException(payload.empty() ? "ggsql: unknown error" : payload);
 	}

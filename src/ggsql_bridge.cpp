@@ -3,23 +3,89 @@
 #include "duckdb/common/arrow/result_arrow_wrapper.hpp"
 #include "duckdb/main/client_context.hpp"
 
+#include <cerrno>
+#include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <string>
+#include <thread>
 
 namespace duckdb {
+
+// Query() blocks during binding and execution, so checking only between bridge
+// calls cannot cancel a long-running inner query. Interrupt() and IsInterrupted()
+// use DuckDB's atomic flag and do not acquire either connection's context lock.
+class InterruptForwarder {
+public:
+	InterruptForwarder(ClientContext &outer, Connection &inner)
+	    : outer(outer), inner(inner), worker([this] { Run(); }) {
+	}
+
+	~InterruptForwarder() {
+		{
+			std::lock_guard<std::mutex> lock(mutex);
+			stopped = true;
+		}
+		condition.notify_one();
+		worker.join();
+	}
+
+private:
+	void Run() {
+		std::unique_lock<std::mutex> lock(mutex);
+		while (!stopped) {
+			if (outer.IsInterrupted()) {
+				inner.Interrupt();
+			}
+			// Keep forwarding: starting another inner query clears its interrupt flag.
+			condition.wait_for(lock, std::chrono::milliseconds(10), [this] { return stopped; });
+		}
+	}
+
+	ClientContext &outer;
+	Connection &inner;
+	std::mutex mutex;
+	std::condition_variable condition;
+	bool stopped = false;
+	std::thread worker;
+};
+
+BridgeCtx::BridgeCtx(ClientContext &outer) : outer(outer) {
+}
+
+BridgeCtx::~BridgeCtx() = default;
+
+bool BridgeCtx::IsInterrupted() const {
+	return outer.IsInterrupted();
+}
+
+Connection &BridgeCtx::GetInnerConnection() {
+	if (IsInterrupted()) {
+		throw InterruptException();
+	}
+	if (!inner) {
+		inner = make_uniq<Connection>(*outer.db);
+		interrupt_forwarder = make_uniq<InterruptForwarder>(outer, *inner);
+	}
+	return *inner;
+}
 
 namespace {
 
 constexpr idx_t ARROW_STREAM_BATCH_SIZE = 100000;
 
 // ---------------------------------------------------------------------------
-// Owner block for a stream produced by the inner Connection's Query().
-// Kept alive (via the Arrow stream's release callback) until Rust finishes
-// consuming the stream, so client_properties.client_context stays valid.
+// Own the result until Rust releases the stream. The bridge and its connection
+// outlive all streams consumed during ggsql_execute.
 // ---------------------------------------------------------------------------
 struct InnerStream {
-	unique_ptr<Connection> connection;
+	explicit InnerStream(BridgeCtx &bridge) : bridge(bridge) {
+	}
+
+	BridgeCtx &bridge;
+	bool interrupted = false;
 	unique_ptr<ResultArrowArrayStreamWrapper> inner;
 };
 
@@ -57,16 +123,29 @@ extern "C" void CppFreeBuffer(ggsql_byte_buffer_t *buf) {
 
 extern "C" int InnerGetSchema(ArrowArrayStream *stream, ArrowSchema *out) {
 	auto *self = static_cast<InnerStream *>(stream->private_data);
+	if (self->bridge.IsInterrupted()) {
+		self->interrupted = true;
+		out->release = nullptr;
+		return EINTR;
+	}
 	return self->inner->stream.get_schema(&self->inner->stream, out);
 }
 
 extern "C" int InnerGetNext(ArrowArrayStream *stream, ArrowArray *out) {
 	auto *self = static_cast<InnerStream *>(stream->private_data);
+	if (self->bridge.IsInterrupted()) {
+		self->interrupted = true;
+		out->release = nullptr;
+		return EINTR;
+	}
 	return self->inner->stream.get_next(&self->inner->stream, out);
 }
 
 extern "C" const char *InnerGetLastError(ArrowArrayStream *stream) {
 	auto *self = static_cast<InnerStream *>(stream->private_data);
+	if (self->interrupted) {
+		return "Interrupted!";
+	}
 	return self->inner->stream.get_last_error(&self->inner->stream);
 }
 
@@ -78,12 +157,6 @@ extern "C" void InnerRelease(ArrowArrayStream *stream) {
 	auto *self = static_cast<InnerStream *>(stream->private_data);
 	stream->private_data = nullptr;
 	delete self;
-}
-
-void EnsureInnerConnection(BridgeCtx &bctx) {
-	if (!bctx.inner) {
-		bctx.inner = make_uniq<Connection>(*bctx.outer->db);
-	}
 }
 
 // --- Bridge callbacks ------------------------------------------------------
@@ -107,11 +180,13 @@ extern "C" int32_t ExecSqlCallback(void *ctx, const char *sql, size_t sql_len, s
 	auto *bctx = static_cast<BridgeCtx *>(ctx);
 	std::string query(sql, sql_len);
 
-	auto holder = make_uniq<InnerStream>();
+	auto holder = make_uniq<InnerStream>(*bctx);
 	unique_ptr<QueryResult> result;
 	try {
-		EnsureInnerConnection(*bctx);
-		result = bctx->inner->Query(query);
+		result = bctx->GetInnerConnection().Query(query);
+		if (bctx->IsInterrupted()) {
+			throw InterruptException();
+		}
 	} catch (const std::exception &ex) {
 		WriteError(out_err, ex.what());
 		return 1;
@@ -129,10 +204,8 @@ extern "C" int32_t ExecSqlCallback(void *ctx, const char *sql, size_t sql_len, s
 		return 1;
 	}
 
-	// The inner Connection must outlive the stream (QueryResult holds a raw pointer to
-	// its ClientContext). Own both inside `holder` and hand off via the stream's
-	// release callback. We use the inner `bctx->inner` directly — it already lives for
-	// the full ggsql_execute call.
+	// QueryResult holds a raw ClientContext pointer. BridgeCtx keeps the inner
+	// connection alive until Rust has consumed and released every stream.
 	try {
 		holder->inner = make_uniq<ResultArrowArrayStreamWrapper>(std::move(result), ARROW_STREAM_BATCH_SIZE);
 	} catch (const std::exception &ex) {

@@ -39,8 +39,7 @@ static void LoadInternal(ExtensionLoader &loader) {
 	ggsql_save_desc.description =
 	    "Renders a ggsql query straight to a file; the writer is inferred from the file extension "
 	    "(.svg, .pdf, .hep, .html, .json) and the output path is returned.";
-	ggsql_save_desc.examples = {
-	    "ggsql_save('SELECT range AS x FROM range(10) VISUALISE x DRAW line', 'plot.svg')"};
+	ggsql_save_desc.examples = {"ggsql_save('SELECT range AS x FROM range(10) VISUALISE x DRAW line', 'plot.svg')"};
 	ggsql_save_desc.categories = {"plotting"};
 	ggsql_save_info.descriptions.push_back(std::move(ggsql_save_desc));
 	loader.RegisterFunction(std::move(ggsql_save_info));
@@ -55,8 +54,7 @@ static void LoadInternal(ExtensionLoader &loader) {
 	ggsql_run_desc.description =
 	    "Executes a ggsql query and returns the plot as a one-row table; used for binary output modes "
 	    "('pdf', 'hep') where the result column is typed as BLOB.";
-	ggsql_run_desc.examples = {
-	    "SELECT plot FROM ggsql_run('SELECT range AS x FROM range(10) VISUALISE x DRAW line')"};
+	ggsql_run_desc.examples = {"SELECT plot FROM ggsql_run('SELECT range AS x FROM range(10) VISUALISE x DRAW line')"};
 	ggsql_run_desc.categories = {"plotting"};
 	ggsql_run_info.descriptions.push_back(std::move(ggsql_run_desc));
 	loader.RegisterFunction(std::move(ggsql_run_info));

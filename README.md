@@ -131,6 +131,19 @@ SELECT * FROM flights VISUALISE dep_delay, arr_delay DRAW point;  -- ✅
 
 The reason is structural: calling `Query` back into the outer `ClientContext` from inside an executing table function deadlocks on the context's mutex, so we open a sibling `Connection` — which by DuckDB's design has its own temp catalog.
 
+### Query interruption
+
+Interrupting the calling connection (for example, Python's `connection.interrupt()`)
+also interrupts SQL running on ggsql's sibling connection. This applies to both
+`SELECT ggsql('...')` and direct `VISUALISE` statements. Cancellation is reported as
+a DuckDB interruption error, and the connection can be used for subsequent queries.
+
+The bridge checks for cancellation between SQL calls and Arrow batches, and forwards
+the caller's interrupt flag every 10 ms while the inner connection is alive. Actual
+termination still depends on the running DuckDB operation reaching a cancellation
+check; the bridge cannot preempt code inside a blocking external function or ggsql's
+Rust rendering code.
+
 ## Running the tests
 
 SQL logic tests under `test/sql/` are the primary test surface:
@@ -140,3 +153,16 @@ GGSQL_NO_OPEN_BROWSER=1 make test
 ```
 
 `GGSQL_NO_OPEN_BROWSER=1` prevents a browser tab from opening for every test query.
+
+The embedded interruption tests use the Python client to interrupt an active query
+from another thread. Install a Python DuckDB version matching the extension build:
+
+```sh
+python -m pip install duckdb==1.5.4 numpy
+GGSQL_EXTENSION_PATH="$PWD/build/release/extension/ggsql/ggsql.duckdb_extension" \
+  python -m unittest discover -s test/python -v
+```
+
+These tests cover both entry points, single- and multi-threaded execution, repeated
+interruptions, connection reuse, and isolation from unrelated queries. Each scenario runs in a subprocess with a
+timeout so a cancellation regression fails instead of hanging the test runner.
